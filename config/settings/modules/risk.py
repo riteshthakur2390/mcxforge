@@ -1,0 +1,219 @@
+import os
+from config.settings.utils import *
+
+
+# ── STRIKE SELECTION ──
+HIGH_CONF_THRESHOLD  = 0.75         # ≥ this → ATM strike
+OTM_OFFSET_POINTS    = 50           # 1 strike OTM offset
+OPTION_CANDIDATE_STEPS = int(os.getenv("OPTION_CANDIDATE_STEPS", "3"))
+OPTION_MIN_PREMIUM = float(os.getenv("OPTION_MIN_PREMIUM", "60"))
+OPTION_MAX_PREMIUM = float(os.getenv("OPTION_MAX_PREMIUM", "320"))
+
+# ── RISK MANAGEMENT ──
+STOP_LOSS_PCT        = 10
+TARGET_PCT           = 250
+TRAILING_SL_PCT      = 15
+ATR_STOP_MULTIPLIER  = float(os.getenv("ATR_STOP_MULTIPLIER", "1.5"))
+ATR_TARGET_MULTIPLIER = float(os.getenv("ATR_TARGET_MULTIPLIER", "5.5"))
+MIN_RR_RATIO = 1.2
+
+BREAKEVEN_R_TRIGGER  = 0.5 #
+TIME_STOP_MINUTES    = int(os.getenv("TIME_STOP_MINUTES", "150"))
+TIME_STOP_MIN_PNL_PCT = -1.5
+MIN_ACCEPTABLE_PROFIT_PCT = float(os.getenv("MIN_ACCEPTABLE_PROFIT_PCT", "1.5"))
+PROFIT_LOCK_TRIGGER_PCT = 12.0
+PROFIT_LOCK_FLOOR_PCT = 8.0
+PROFIT_PROTECT_MIN_PEAK_PCT = 15.0
+PROFIT_PROTECT_GIVEBACK_PCT = float(os.getenv("PROFIT_PROTECT_GIVEBACK_PCT", "2.5"))
+MIN_ENTRY_MINUTES_BEFORE_CLOSE = int(
+    os.getenv("MIN_ENTRY_MINUTES_BEFORE_CLOSE", "8")
+)
+EXPIRY_EARLY_ENTRY_MINUTE = int(
+    os.getenv("EXPIRY_EARLY_ENTRY_MINUTE", str(9 * 60 + 35))
+)
+EXPIRY_EARLY_MIN_RANK = float(os.getenv("EXPIRY_EARLY_MIN_RANK", "0.50"))
+EXPIRY_EARLY_MIN_SETUP = float(os.getenv("EXPIRY_EARLY_MIN_SETUP", "0.68"))
+EXPIRY_EARLY_MIN_VOTES = int(os.getenv("EXPIRY_EARLY_MIN_VOTES", "3"))
+HIGH_VOL_ATR_PCT     = float(os.getenv("HIGH_VOL_ATR_PCT", "0.008"))
+HIGH_VOL_TARGET_COMPRESSION = float(
+    os.getenv("HIGH_VOL_TARGET_COMPRESSION", "0.85")
+)
+RISK_BUDGET_PER_TRADE_PCT = 2.0
+MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "0"))
+MAX_POSITION_LOTS    = 3
+TWO_LOT_CONFIDENCE_THRESHOLD = float(
+    os.getenv("TWO_LOT_CONFIDENCE_THRESHOLD", "0.70")
+)
+
+EXECUTION_MIN_RANK_SCORE = 0.30
+
+EXECUTION_LAST_ENTRY_MINUTE = int(os.getenv("EXECUTION_LAST_ENTRY_MINUTE", str(23 * 60)))
+PREMIUM_CAPTURE_PCT = float(os.getenv("PREMIUM_CAPTURE_PCT", "0.0"))
+PREMIUM_CAPTURE_MIN_HOLD_MINUTES = int(os.getenv("PREMIUM_CAPTURE_MIN_HOLD_MINUTES", "15"))
+PREMIUM_CAPTURE_MIN_RANK = float(os.getenv("PREMIUM_CAPTURE_MIN_RANK", "0.45"))
+PREMIUM_CAPTURE_MIN_SETUP = float(os.getenv("PREMIUM_CAPTURE_MIN_SETUP", "0.68"))
+BACKTEST_OPTION_SLIPPAGE_PCT = float(
+    os.getenv("BACKTEST_OPTION_SLIPPAGE_PCT", "1.0")
+)
+PLANNER_ENTRY_SLIPPAGE_PCT = float(
+    os.getenv("PLANNER_ENTRY_SLIPPAGE_PCT", "0.75")
+)
+PLANNER_MIN_EXECUTABLE_RANK = 0.30
+PLANNER_MIN_STRATEGY_CONFIDENCE = float(
+    os.getenv("PLANNER_MIN_STRATEGY_CONFIDENCE", "0.0")
+)
+BACKTEST_BROKERAGE_PER_ORDER = float(
+    os.getenv("BACKTEST_BROKERAGE_PER_ORDER", "20")
+)
+BACKTEST_TRANSACTION_COST_PCT = float(
+    os.getenv("BACKTEST_TRANSACTION_COST_PCT", "0.12")
+)
+BACKTEST_USE_HISTORICAL_OPTION_PREMIUM = _flag(
+    "BACKTEST_ENABLE_HISTORICAL_OPTION_PREMIUM",
+    "false",
+)
+FINAL_DECISION_MIN_RISK_PCT = float(
+    os.getenv("FINAL_DECISION_MIN_RISK_PCT", "1.0")
+)
+FINAL_DECISION_MAX_RISK_PCT = float(
+    os.getenv("FINAL_DECISION_MAX_RISK_PCT", "2.0")
+)
+FINAL_DECISION_MIN_EXPECTANCY_INR = float(
+    os.getenv("FINAL_DECISION_MIN_EXPECTANCY_INR", "0")
+)
+FINAL_DECISION_MIN_HISTORY = int(
+    os.getenv("FINAL_DECISION_MIN_HISTORY", "8")
+)
+
+# ── FINAL DECISION ──
+FINAL_DECISION_LOT_FALLBACK_RISK_MULT = float(os.getenv("FINAL_DECISION_LOT_FALLBACK_RISK_MULT", "0.05"))
+FINAL_DECISION_SETUP_STRENGTH_DEFAULT = float(os.getenv("FINAL_DECISION_SETUP_STRENGTH_DEFAULT", "0.5"))
+FINAL_DECISION_QUALITY_FLOOR_MAX      = float(os.getenv("FINAL_DECISION_QUALITY_FLOOR_MAX", "0.90"))
+FINAL_DECISION_RANK_WEIGHT            = float(os.getenv("FINAL_DECISION_RANK_WEIGHT", "0.55"))
+FINAL_DECISION_SETUP_WEIGHT           = float(os.getenv("FINAL_DECISION_SETUP_WEIGHT", "0.45"))
+FINAL_DECISION_WIN_PROB_MIN           = float(os.getenv("FINAL_DECISION_WIN_PROB_MIN", "0.05"))
+FINAL_DECISION_WIN_PROB_MAX           = float(os.getenv("FINAL_DECISION_WIN_PROB_MAX", "0.95"))
+FINAL_DECISION_QUALITY_WEIGHT         = float(os.getenv("FINAL_DECISION_QUALITY_WEIGHT", "0.65"))
+FINAL_DECISION_HIST_WEIGHT            = float(os.getenv("FINAL_DECISION_HIST_WEIGHT", "0.35"))
+FINAL_DECISION_LOSS_FLOOR             = float(os.getenv("FINAL_DECISION_LOSS_FLOOR", "0.01"))
+FINAL_DECISION_AVG_WIN_GROSS_WEIGHT   = float(os.getenv("FINAL_DECISION_AVG_WIN_GROSS_WEIGHT", "0.5"))
+FINAL_DECISION_AVG_WIN_HIST_WEIGHT    = float(os.getenv("FINAL_DECISION_AVG_WIN_HIST_WEIGHT", "0.3"))
+FINAL_DECISION_AVG_WIN_SETUP_WEIGHT   = float(os.getenv("FINAL_DECISION_AVG_WIN_SETUP_WEIGHT", "0.2"))
+FINAL_DECISION_AVG_LOSS_GROSS_WEIGHT  = float(os.getenv("FINAL_DECISION_AVG_LOSS_GROSS_WEIGHT", "0.6"))
+FINAL_DECISION_AVG_LOSS_HIST_WEIGHT   = float(os.getenv("FINAL_DECISION_AVG_LOSS_HIST_WEIGHT", "0.4"))
+FINAL_DECISION_RISK_ANCHOR_ATR        = float(os.getenv("FINAL_DECISION_RISK_ANCHOR_ATR", "0.004"))
+FINAL_DECISION_VOL_FACTOR_MIN         = float(os.getenv("FINAL_DECISION_VOL_FACTOR_MIN", "0.65"))
+FINAL_DECISION_VOL_FACTOR_MAX         = float(os.getenv("FINAL_DECISION_VOL_FACTOR_MAX", "1.15"))
+FINAL_DECISION_FALLBACK_WIN_RATE      = float(os.getenv("FINAL_DECISION_FALLBACK_WIN_RATE", "0.54"))
+FINAL_DECISION_FALLBACK_AVG_WIN_PCT   = float(os.getenv("FINAL_DECISION_FALLBACK_AVG_WIN_PCT", "12.0"))
+FINAL_DECISION_FALLBACK_AVG_LOSS_PCT  = float(os.getenv("FINAL_DECISION_FALLBACK_AVG_LOSS_PCT", "7.0"))
+FINAL_DECISION_JOURNAL_LOOKBACK       = int(os.getenv("FINAL_DECISION_JOURNAL_LOOKBACK", "20"))
+MIN_DAYS_TO_EXPIRY   = 2            # skip expiry if < 2 days away
+MAX_DAILY_LOSS_PCT   = 15.0         # daily kill switch percentage (15% of capital)
+MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "4"))
+PAPER_TRADING_CAPITAL = float(os.getenv("PAPER_TRADING_CAPITAL", "200000"))
+
+# ── TRANSACTION COSTS ──
+# Realistic cost model for NIFTY options (per lot = 75 units)
+# These are used to filter out trades where expected profit < cost
+BROKERAGE_PER_LOT = 20.0  # Zerodha flat fee ₹20 per order × 2 (entry+exit)
+STT_SELL_PCT = 0.0625  # STT on sell side for options = 0.0625%
+SEBI_CHARGES_PCT = 0.0001  # SEBI charges
+STAMP_DUTY_PCT = 0.003  # Stamp duty on buy side
+MIN_EXPECTED_PROFIT = 100.0  # Minimum expected P&L after costs to take trade (₹)
+
+# ── POSITION SIZING ──
+# Volatility-adjusted position sizing using ATR as proxy for risk
+# Higher ATR = smaller position (more volatile = more risk per lot)
+POSITION_SIZING_MODE = "fixed"  # "fixed" | "volatility" | "kelly"
+CAPITAL_PER_TRADE = float(os.getenv("CAPITAL_PER_TRADE", "30000.0"))  # 15% of ₹200,000 capital
+MAX_LOTS_PER_TRADE = 3  # maximum lots regardless of sizing
+KELLY_FRACTION = 0.25  # fraction of Kelly criterion to use (conservative)
+
+
+# Penalty multipliers applied to threshold (make threshold HIGHER for penalised signals)
+# Setting these lower = fewer signals rejected by bias penalties
+ML_CALL_BIAS_PENALTY     = 0.01   # was 0.03
+ML_MORNING_CHOP_PENALTY  = 0.02   # was 0.04
+ML_LATE_SESSION_PENALTY  = 0.02   # was 0.04
+ML_WEAK_PAIR_PENALTY     = 0.02   # was 0.02
+ML_WEAK_SETUP_PENALTY    = 0.03   # was 0.05
+
+
+# Per-tier thresholds (low_tier is the most common rejection reason)
+ML_RANK_TIER_LOW         = 0.42   # Restored from 0.45 for higher frequency
+ML_RANK_TIER_MID         = 0.48   # Restored from 0.50
+ML_RANK_TIER_HIGH        = 0.52   # Restored from 0.54
+
+
+# ── FUND & DAILY CAPITAL MANAGEMENT ──
+TOTAL_FUND = float(os.getenv("TOTAL_FUND", "200000"))  # ₹2L default
+DAILY_CAPITAL_PCT = 15.0  # HARDCODED — do not change
+CAPITAL_SPLIT_MODE = "daily"  # "daily" | "dynamic"
+MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "0"))  # 0 disables daily trade-count cap
+
+# ── ATR-BASED DYNAMIC SL (replaces fixed %) ──
+USE_ATR_SL = True  # True = dynamic ATR SL, False = fixed %
+ATR_SL_MULTIPLIER = 2.0  # SL = Entry - 2 × ATR(14) on underlying
+ATR_SL_MIN_PCT = 10.0  # minimum SL even on calm days (10%)
+ATR_SL_MAX_PCT = 35.0  # maximum SL even on volatile days (35%)
+ATR_PERIOD = 14  # ATR period
+
+# ── REGIME-ADAPTIVE SL/TARGET ──
+REGIME_ADAPTIVE_EXITS = True  # enable regime-based parameter switching
+SL_TRENDING_STRONG = 15.0
+TARGET_TRENDING_STRONG = 42.0
+SL_TRENDING_WEAK = 22.0
+TARGET_TRENDING_WEAK = 36.0
+SL_RANGING = 30.0
+TARGET_RANGING = 32.0
+SL_CHOPPY = 20.0
+TARGET_CHOPPY = 30.0
+
+# ── EXPECTED MOVE STRIKE SELECTION ──
+USE_EM_STRIKE = True  # True = EM-based, False = fixed OTM offset
+EM_FRACTION = 0.5  # select strike at 50% of Expected Move from ATM
+EM_MIN_OTM_PCT = 0.3  # minimum 0.3% OTM regardless of EM
+EM_MAX_OTM_PCT = 3.0  # maximum 3% OTM regardless of EM
+
+# ── SIGNAL CONFLICT RESOLVER ──
+CONFLICT_RESOLVER_ENABLED = False
+CONFLICT_LOOKBACK_TRADES = 5
+CONFLICT_MAX_LOSS_STREAK = 3
+CONFLICT_PAUSE_MINUTES = 30
+CONFLICT_STRATEGY_LOOKBACK = 5
+CONFLICT_STRATEGY_MIN_WR = 0.30
+
+# ── PROFIT BOOKING LADDER (partial scale-out) ──
+USE_PROFIT_LADDER = True
+LADDER_BOOK_1_PCT = 30.0
+LADDER_BOOK_1_QTY = 50
+LADDER_BOOK_2_PCT = 55.0
+LADDER_BOOK_2_QTY = 50
+LADDER_HOLD_QTY = 70
+
+# ── TRAILING STOP-LOSS — TIERED SYSTEM (industry standard) ──
+TRAILING_SL_ACTIVATION_PCT = 32.0
+TRAILING_SL_PCT = 20.0
+TRAILING_SL_PCT_TIER2 = 20.0
+TRAILING_SL_PCT_TIER3 = 24.0
+TRAILING_SL_ADX_BONUS = 5.0
+TRAILING_SL_ADX_THRESH = 35.0
+
+STALE_EARLY_CHECK_CANDLES = 4
+STALE_EARLY_LOSS_THRESHOLD = float(os.getenv("STALE_EARLY_LOSS_THRESHOLD", "-6.0"))
+STALE_MOMENTUM_THRESHOLD = 0.58
+STALE_MAX_CANDLES = 15
+
+# ── CAPITAL & RISK GUARD (agent10_risk) ──
+TOTAL_FUND = float(os.getenv("TOTAL_FUND", "200000"))
+DEPLOYED_CAPITAL = float(os.getenv("DEPLOYED_CAPITAL", "30000"))
+STRONG_SIGNAL_CAPITAL_PCT = float(os.getenv("STRONG_SIGNAL_CAPITAL_PCT", "15.0"))
+RISK_PER_TRADE_PCT = 1.0
+MAX_DAILY_LOSS_INR = 0
+MIN_DELTA_EXIT = 0.15
+
+# ── EQUITY CURVE RISK SIGNALS ──
+EQUITY_PAUSE_CONSEC_LOSSES = 3
+EQUITY_REDUCE_CONSEC_LOSSES = 2
+EQUITY_MAX_DRAWDOWN_PCT = 15.0

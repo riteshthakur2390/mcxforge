@@ -1,0 +1,1 @@
+S27_MIN_CANDLES = 25

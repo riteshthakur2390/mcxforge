@@ -1,0 +1,32 @@
+{
+  "backtest_id": "BT_DonchianBreakout_SILVERMIC_20260904_162252",
+  "strategy_name": "DonchianBreakout",
+  "strategy_version": "1.0.0",
+  "instrument_symbol": "SILVERMIC",
+  "timeframe": "5m",
+  "contract_mode": "CONTINUOUS_CONTRACT",
+  "contract_symbol": "SILVERMIC-FRONT",
+  "start_time": "2026-09-01T08:37:00+05:30",
+  "end_time": "2026-09-03T14:22:00+05:30",
+  "initial_capital_inr": 200000.0,
+  "lots": 1,
+  "slippage": {
+    "slippage_type": "FIXED_TICKS",
+    "value": 1.0
+  },
+  "same_bar_rule": "STOP_FIRST",
+  "enable_intraday_eod_squareoff": true,
+  "eod_squareoff_time": "23:15",
+  "strategy_parameters": {
+    "entry_lookback": 20,
+    "exit_lookback": 10,
+    "breakout_buffer_atr_mult": 0.05,
+    "atr_period": 14,
+    "atr_sl_multiplier": 2.0,
+    "risk_reward_ratio": 2.5,
+    "min_volume_ratio": 0.9,
+    "max_holding_bars": 150
+  },
+  "oos_split_pct": null,
+  "created_at": "2026-09-04T16:22:52.985701+05:30"
+}

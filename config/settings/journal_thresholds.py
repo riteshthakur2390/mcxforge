@@ -1,0 +1,7 @@
+"""
+Auto-extracted Journal thresholds.
+"""
+
+JOURNAL_RANK_SCORE_THRESH_0_52 = 0.52
+JOURNAL_RANK_SCORE_THRESH_0_56 = 0.56
+JOURNAL_RANK_SCORE_THRESH_0_6 = 0.6

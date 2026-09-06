@@ -1,0 +1,6 @@
+strategy,instrument,trades,sample_reliability,win_rate_pct,gross_pnl_inr,total_costs_inr,slippage_inr,net_pnl_inr,profit_factor,expectancy_inr,max_drawdown_inr,max_drawdown_pct,avg_mfe_pts,avg_mae_pts,mfe_mae_ratio,avg_holding_minutes
+TrendFollowing,SILVERMIC,100,MODERATE SAMPLE (100-299 trades),31.0,-888.0,8940.34,200.0,-9828.34,0.97,-98.28,9984.42,4.99,678.61,461.51,1.47,30.8
+OpeningRangeBreakout,SILVERMIC,13,VERY LOW SAMPLE (<30 trades),38.46,-1190.0,1162.72,26.0,-2352.72,0.74,-180.98,3292.19,1.64,750.77,622.46,1.21,21.2
+VWAPMeanReversion,SILVERMIC,1,VERY LOW SAMPLE (<30 trades),0.0,-338.0,88.22,2.0,-426.22,0.0,-426.22,426.22,0.21,0.0,337.0,0.0,0.0
+VolatilityBreakout,SILVERMIC,30,LOW SAMPLE (30-99 trades),16.67,-4161.0,2678.37,60.0,-6839.37,0.43,-227.98,8020.78,4.01,628.07,428.07,1.47,22.7
+DonchianBreakout,SILVERMIC,45,LOW SAMPLE (30-99 trades),40.0,2071.0,4024.92,90.0,-1953.92,1.14,-43.42,5706.31,2.8,834.98,582.93,1.43,74.4

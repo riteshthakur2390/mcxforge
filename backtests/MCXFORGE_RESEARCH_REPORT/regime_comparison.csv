@@ -1,0 +1,11 @@
+trades,win_rate_pct,net_pnl_inr,profit_factor,expectancy_inr,strategy,regime
+10,60.0,2688.77,3.34,268.88,TrendFollowing,TREND
+90,27.8,-12517.11,0.81,-139.08,TrendFollowing,BREAKOUT
+9,44.4,-1441.15,0.79,-160.13,OpeningRangeBreakout,BREAKOUT
+4,25.0,-911.57,0.63,-227.89,OpeningRangeBreakout,TREND
+1,0.0,-426.22,0.0,-426.22,VWAPMeanReversion,RANGE
+22,13.6,-5808.44,0.27,-264.02,VolatilityBreakout,BREAKOUT
+3,0.0,-1302.55,0.0,-434.18,VolatilityBreakout,TREND
+5,40.0,271.62,1.7,54.32,VolatilityBreakout,HIGH_VOLATILITY
+41,39.0,-3638.55,1.0,-88.75,DonchianBreakout,BREAKOUT
+4,50.0,1684.63,2.82,421.16,DonchianBreakout,TREND

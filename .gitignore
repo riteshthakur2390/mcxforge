@@ -1,0 +1,91 @@
+# =============================================================================
+# MCXForge Git Ignore Configuration
+# =============================================================================
+
+# Byte-compiled / optimized / C-extensions
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C extensions / build artifacts
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Environment Variables & Secrets
+.env
+*.env
+!.env.example
+
+# IDEs & Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing, Linter & Coverage Caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.ruff_cache/
+.mypy_cache/
+
+# Logs, Telemetry & Journals
+logs/
+*.log
+llm_costs.csv
+journal/
+
+# Large Datasets & Market Cache
+data/
+pandas_ta/
+
+# Heavy Backtest Results & Ledger Archives
+backtesting/results/
+analysis/
+
+# Scratch & Ad-hoc Parameter Dumps
+scratch/
+
+# Runtime Experiment Dumps & Flags
+state/experiment_*
+state/shadow_live/
+*.flag
+
+# Backup & Model Candidates
+backups/
+*.bak
+*.backup*
+*.candidate*
+ml/saved_models/*.backup*
+ml/saved_models/*.candidate*

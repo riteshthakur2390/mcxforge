@@ -1,0 +1,1 @@
+S30_MIN_CANDLES = 15

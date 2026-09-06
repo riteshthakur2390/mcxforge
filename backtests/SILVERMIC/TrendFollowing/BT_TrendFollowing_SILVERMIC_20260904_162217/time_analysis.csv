@@ -1,0 +1,4 @@
+,trades,win_rate_pct,net_pnl_inr,profit_factor,expectancy_inr
+11:00-14:00 (European Pre-Market),5,60.0,57.86,13.23,11.57
+09:00-11:00 (Opening Discovery),4,50.0,73.56,11.84,18.39
+14:00-17:00 (European Active),1,100.0,64.14,999.0,64.14

@@ -1,0 +1,1 @@
+S29_MIN_CANDLES = 20

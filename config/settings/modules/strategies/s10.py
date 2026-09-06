@@ -1,0 +1,26 @@
+import os
+from config.settings.utils import *
+
+S10_VP_LOOKBACK = int(os.getenv("S10_VP_LOOKBACK", "75"))
+S10_VP_NUM_LEVELS = int(os.getenv("S10_VP_NUM_LEVELS", "50"))
+S10_VP_VALUE_AREA = float(os.getenv("S10_VP_VALUE_AREA", "0.70"))
+S10_VP_VOL_MULT = float(os.getenv("S10_VP_VOL_MULT", "1.5"))
+S10_VP_MIN_BASE = int(os.getenv("S10_VP_MIN_BASE", "3"))
+S10_REJECTION_TOUCH_FACTOR_BULL = float(os.getenv("S10_REJECTION_TOUCH_FACTOR_BULL", "1.001"))
+S10_REJECTION_TOUCH_FACTOR_BEAR = float(os.getenv("S10_REJECTION_TOUCH_FACTOR_BEAR", "0.999"))
+S10_REJECTION_PENALTY = float(os.getenv("S10_REJECTION_PENALTY", "0.02"))
+S10_CONF_BASE = float(os.getenv("S10_CONF_BASE", "0.58"))
+S10_CONF_VPOC_VOL_FACTOR = float(os.getenv("S10_CONF_VPOC_VOL_FACTOR", "1.8"))
+S10_CONF_VPOC_VOL_BONUS = float(os.getenv("S10_CONF_VPOC_VOL_BONUS", "0.05"))
+S10_CONF_CLEAN_BREAKOUT_BONUS = float(os.getenv("S10_CONF_CLEAN_BREAKOUT_BONUS", "0.04"))
+S10_CONF_VOL_BONUS_1_THRESHOLD = float(os.getenv("S10_CONF_VOL_BONUS_1_THRESHOLD", "2.0"))
+S10_CONF_VOL_BONUS_1 = float(os.getenv("S10_CONF_VOL_BONUS_1", "0.03"))
+S10_CONF_VOL_BONUS_2 = float(os.getenv("S10_CONF_VOL_BONUS_2", "0.02"))
+S10_CONF_DIST_BONUS_THRESHOLD = float(os.getenv("S10_CONF_DIST_BONUS_THRESHOLD", "0.15"))
+S10_CONF_DIST_BONUS = float(os.getenv("S10_CONF_DIST_BONUS", "0.02"))
+S10_CONF_MAX = float(os.getenv("S10_CONF_MAX", "0.83"))
+S10_MIN_DF_OFFSET = 2
+
+S10_REQUIRES_LIVE_BROKER = _flag("S10_REQUIRES_LIVE_BROKER", "false")
+S10_REQUIRES_ORB = _flag("S10_REQUIRES_ORB", "false")
+S10_MIN_DF_LEN = int(os.getenv("S10_MIN_DF_LEN", "50"))

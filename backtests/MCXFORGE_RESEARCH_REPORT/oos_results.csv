@@ -1,0 +1,6 @@
+strategy,is_trades,is_net_pnl,is_profit_factor,oos_trades,oos_net_pnl,oos_profit_factor,oos_win_rate,oos_expectancy,oos_max_drawdown,oos_verdict
+TrendFollowing,68,-6438.14,0.98,27,-3487.84,0.81,22.22,-129.18,3487.84,FAIL (Negative OOS)
+OpeningRangeBreakout,11,-1595.53,0.85,2,-757.19,0.0,0.0,-378.59,757.19,FAIL (Negative OOS)
+VWAPMeanReversion,0,0.0,0.0,0,0.0,0.0,0.0,0.0,0.0,FAIL (Negative OOS)
+VolatilityBreakout,20,-6520.05,0.08,10,671.89,2.27,30.0,67.19,1452.65,PASS (Positive OOS)
+DonchianBreakout,31,-949.26,1.15,14,-1271.17,0.99,35.71,-90.8,1902.55,FAIL (Negative OOS)

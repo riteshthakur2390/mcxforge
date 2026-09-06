@@ -1,0 +1,48 @@
+{
+  "active_setups": [
+    {
+      "signal_id": "TEST_SIG_1",
+      "instrument": "NIFTY",
+      "direction": "BUY_CALL",
+      "original_signal_timestamp": "2026-08-01T09:45:00+05:53",
+      "signal_price": 24500.0,
+      "ema20_at_signal": 24480.0,
+      "atr_at_signal": 25.0,
+      "quality_classification": "MEDIUM_QUALITY",
+      "raw_vote_count": 4,
+      "independent_category_count": 3,
+      "ml_state": "POSITIVE",
+      "state": "PENDING_PULLBACK",
+      "previous_state": "SIGNAL_RECEIVED",
+      "state_timestamp": "2026-08-01T09:45:00+05:53",
+      "bars_observed": 0,
+      "max_observation_bars": 6,
+      "max_observation_minutes": 30,
+      "retest_timestamp": null,
+      "retest_price": null,
+      "confirmation_timestamp": null,
+      "shadow_entry_timestamp": null,
+      "shadow_entry_price": null,
+      "invalidation_timestamp": null,
+      "invalidation_price": null,
+      "invalidation_level": 24465.0,
+      "invalidation_reason": null,
+      "expiration_timestamp": null,
+      "transition_reason": "MEDIUM_QUALITY_SIGNAL_REGISTERED",
+      "max_directional_move_pts": 0.0,
+      "actual_realized_mae": null,
+      "actual_realized_mfe": null,
+      "risk_cap_distance_pts": 15.0,
+      "state_history": [
+        {
+          "from_state": "SIGNAL_RECEIVED",
+          "to_state": "PENDING_PULLBACK",
+          "timestamp": "2026-08-01T09:45:00+05:53",
+          "reason": "INITIAL_REGISTRATION"
+        }
+      ]
+    }
+  ],
+  "completed_setups": [],
+  "last_persisted_ts": "2026-08-29T13:14:23.684969+05:30"
+}

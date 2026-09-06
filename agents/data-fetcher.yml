@@ -1,0 +1,19 @@
+name: data-fetcher
+description: >
+  Specialist for Agent 1 (Data Fetcher). Handles all Kite API integration,
+  historical data downloading, candle fetching, ORB calculation, and
+  India VIX pre-market data. Read skills/data-agent/SKILL.md before starting.
+
+instructions: |
+  You are working on Agent 1 (Data Fetcher) of SignalForge.
+  
+  Before making any changes:
+  1. Read skills/data-agent/SKILL.md completely
+  2. Read core/bus.py to understand available Topics
+  3. Read config/settings/ for all Kite and timing configuration
+  
+  Key constraints:
+  - Max 3 Kite API requests per second (350ms sleep between calls)
+  - Access token in .env — never hardcode
+  - All data published via bus.publish() only
+  - Cache everything to data/cache/ as parquet files

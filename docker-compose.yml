@@ -1,0 +1,74 @@
+services:
+
+  mcxforge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcxforge
+    platform: linux/amd64
+    init: true
+
+    ports:
+      - "5054:5054"
+
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+    volumes:
+      # ── Persistent data (survives container restarts and rebuilds)
+      - ./data:/app/data
+      - ./journal:/app/journal
+      - ./logs:/app/logs
+      - ./ml/saved_models:/app/ml/saved_models
+      - ./backtesting/results:/app/backtesting/results
+      # ── Live code mount (code changes take effect on restart)
+      - ./agents_code:/app/agents_code
+      - ./core:/app/core
+      - ./config:/app/config
+      - ./utils:/app/utils
+      - ./dashboard:/app/dashboard
+      - ./broker:/app/broker
+      - ./scripts:/app/scripts
+      - ./backtesting:/app/backtesting
+      - ./main.py:/app/main.py
+      # ── Credentials
+      - ./.env:/app/.env
+      - ./data/oi_history:/app/data/oi_history
+
+    env_file:
+      - .env
+
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - TRADING_MODE=${TRADING_MODE:-OBSERVE}
+      - BROKER=${BROKER:-dhan}
+      - INSTRUMENT=${INSTRUMENT:-SILVERMIC}
+      - COMMODITY=${COMMODITY:-SILVERMIC}
+      - TELEGRAM_TARGET=LIVE
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - DASHBOARD_PORT=5054
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+        reservations:
+          memory: 512M
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5054/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

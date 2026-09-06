@@ -1,0 +1,6 @@
+strategy,scorecard_status,rationale,trades,sample_reliability,full_net_pnl_inr,profit_factor,expectancy_inr,max_drawdown_inr,oos_net_pnl_inr,slippage_5_ticks_net_pnl
+TrendFollowing,REJECT,"Negative net performance (₹-9,828) with PF=0.97.",100,MODERATE SAMPLE (100-299 trades),-9828.34,0.97,-98.28,9984.42,-3487.84,-10628.34
+OpeningRangeBreakout,INSUFFICIENT DATA,Trade count (13) below minimum statistical threshold of 30.,13,VERY LOW SAMPLE (<30 trades),-2352.72,0.74,-180.98,3292.19,-757.19,-2456.72
+VWAPMeanReversion,INSUFFICIENT DATA,Trade count (1) below minimum statistical threshold of 30.,1,VERY LOW SAMPLE (<30 trades),-426.22,0.0,-426.22,426.22,0.0,-434.22
+VolatilityBreakout,REJECT,"Negative net performance (₹-6,839) with PF=0.43.",30,LOW SAMPLE (30-99 trades),-6839.37,0.43,-227.98,8020.78,671.89,-7079.37
+DonchianBreakout,WEAK,"Gross edge (₹2,071) extinguished by statutory transaction costs & slippage (Net P&L ₹-1,954).",45,LOW SAMPLE (30-99 trades),-1953.92,1.14,-43.42,5706.31,-1271.17,-2313.92

@@ -1,0 +1,36 @@
+{
+  "backtest_id": "BT_VolatilityBreakout_SILVERMIC_20260904_162243",
+  "strategy_name": "VolatilityBreakout",
+  "strategy_version": "1.0.0",
+  "instrument_symbol": "SILVERMIC",
+  "timeframe": "5m",
+  "contract_mode": "CONTINUOUS_CONTRACT",
+  "contract_symbol": "SILVERMIC-FRONT",
+  "start_time": "2026-09-01T08:37:00+05:30",
+  "end_time": "2026-09-03T14:22:00+05:30",
+  "initial_capital_inr": 200000.0,
+  "lots": 1,
+  "slippage": {
+    "slippage_type": "FIXED_TICKS",
+    "value": 1.0
+  },
+  "same_bar_rule": "STOP_FIRST",
+  "enable_intraday_eod_squareoff": true,
+  "eod_squareoff_time": "23:15",
+  "strategy_parameters": {
+    "bb_period": 20,
+    "bb_std": 2.0,
+    "keltner_period": 20,
+    "keltner_mult": 1.5,
+    "compression_lookback": 15,
+    "expansion_bar_mult": 1.6,
+    "volume_expansion_mult": 1.3,
+    "abnormal_vol_max_atr_ratio": 2.8,
+    "atr_sl_multiplier": 1.6,
+    "risk_reward_ratio": 2.0,
+    "trailing_stop_atr_mult": 1.4,
+    "max_holding_bars": 75
+  },
+  "oos_split_pct": null,
+  "created_at": "2026-09-04T16:22:43.289770+05:30"
+}

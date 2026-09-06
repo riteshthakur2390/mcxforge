@@ -1,0 +1,56 @@
+{
+  "metrics": {
+    "total_trades": 10,
+    "long_trades": 5,
+    "short_trades": 5,
+    "winning_trades": 6,
+    "losing_trades": 4,
+    "breakeven_trades": 0,
+    "win_rate_pct": 60.0,
+    "profit_factor": 163.8,
+    "expectancy_points": 81.4,
+    "expectancy_inr": 19.56,
+    "avg_win_inr": 74.66,
+    "avg_loss_inr": -63.1,
+    "largest_win_inr": 90.14,
+    "largest_loss_inr": -102.79,
+    "win_loss_ratio": 1.18,
+    "avg_holding_time_minutes": 51.5,
+    "gross_pnl_inr": 814.0,
+    "total_costs_inr": 618.44,
+    "total_slippage_inr": 20.0,
+    "net_pnl_inr": 195.56,
+    "max_drawdown_inr": 114.72,
+    "max_drawdown_pct": 0.06,
+    "max_consecutive_wins": 2,
+    "max_consecutive_losses": 2,
+    "sharpe_ratio": 4.45,
+    "sortino_ratio": 12.37,
+    "calmar_ratio": 1.7,
+    "avg_mfe_points": 115.51,
+    "avg_mae_points": 14.67,
+    "mfe_mae_ratio": 7.87,
+    "sl_hit_count": 4,
+    "target_hit_count": 6,
+    "strategy_exit_count": 0,
+    "eod_exit_count": 0,
+    "ambiguous_bar_count": 0
+  },
+  "direction_breakdown": {
+    "SELL": {
+      "trades": 5,
+      "win_rate_pct": 60.0,
+      "net_pnl_inr": 57.86,
+      "profit_factor": 13.23,
+      "expectancy_inr": 11.57
+    },
+    "BUY": {
+      "trades": 5,
+      "win_rate_pct": 60.0,
+      "net_pnl_inr": 137.7,
+      "profit_factor": 16.88,
+      "expectancy_inr": 27.54
+    }
+  },
+  "oos_metrics": null
+}
