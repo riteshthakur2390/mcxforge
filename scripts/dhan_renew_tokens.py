@@ -148,6 +148,7 @@ def _send_telegram(message: str) -> None:
 
 
 SIBLING_PROJECTS = [
+    Path("/Users/vishranti/Downloads/projects/signalforge"),
     Path("/Users/vishranti/Downloads/projects/thetaforge"),
     Path("/Users/vishranti/Downloads/projects/expiryforge"),
     Path("/Users/vishranti/Downloads/projects/swingforge"),

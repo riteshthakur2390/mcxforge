@@ -28,6 +28,7 @@ from utils.performance_analytics import PerformanceAnalytics
 from utils.signal_conflict_resolver import get_resolver
 from utils.audit_trail import get_audit
 from utils.latency_fill_monitor import LatencyAndFillQualityMonitor
+from utils.market_calendar import is_trading_day
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -39,6 +40,7 @@ class AnalyticsAgent:
         self.bus     = get_bus()
         self.backtest_mode = backtest_mode
         self._today  = date.today().isoformat()
+        self._brief_published_date: Optional[str] = None
         self._journal: list[dict] = []
         self._seen_suppressed_ids: set[str] = set()
         self._stats  = {
@@ -288,30 +290,52 @@ class AnalyticsAgent:
     async def on_premarket(self, msg: Message) -> None:
         self._premarket = msg.payload
         ts_raw = msg.payload.get("timestamp")
+        now_dt = datetime.now(IST)
         if ts_raw:
-            self._today = datetime.fromisoformat(str(ts_raw)).date().isoformat()
+            try:
+                now_dt = datetime.fromisoformat(str(ts_raw))
+            except Exception:
+                pass
+        self._today = now_dt.date().isoformat()
+
+        # Guard against duplicate sends on the same day if process/container restarts
+        if self._brief_published_date == self._today:
+            logger.info(f"[{self.NAME}] Market brief already published for {self._today} — skipping duplicate.")
+            return
+
+        is_open = is_trading_day(now_dt.date())
+        day_note = "" if is_open else " ⏸️ (Weekend / Market Closed)"
+
         bias    = msg.payload.get("bias", "NEUTRAL")
         raw_vix = float(msg.payload.get("india_vix") or msg.payload.get("vix") or 0.0)
         vix     = raw_vix if 8.0 <= raw_vix <= 80.0 else 14.0
-        vix_note = "" if 8.0 <= raw_vix <= 80.0 else " fallback"
+        vix_note = "" if 8.0 <= raw_vix <= 80.0 else " (fallback)"
         gap_pct = float(msg.payload.get("gap_pct", 0))
         prev_close = float(msg.payload.get("prev_close", msg.payload.get("nifty_prev_close", 0)) or 0)
         today_open = float(msg.payload.get("today_open", 0) or 0)
         gap_ready = bool(msg.payload.get("gap_ready", False))
+        mode = TRADING_MODE
 
         brief = (
-            f"[PROGRESS] *SignalForge Morning Brief*\n"
-            f"\n"
-            f" Bias: *{bias}* | Gap: {gap_pct:+.2f}%\n"
-            f" Prev Close: {prev_close:.2f} | Open: {today_open:.2f}\n"
-            f" India VIX: {vix:.1f}{vix_note}\n"
-            f" Mode: {TRADING_MODE} | Gap Ready: {'YES' if gap_ready else 'NO'}\n"
-            f" Signal window: 09:30:15:00"
+            f"🛡️ *MCXForge Daily Market Brief*\n"
+            f"📅 {now_dt.strftime('%d %b %Y')}{day_note}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 Commodity: *SILVERM* (Silver Micro Futures)\n"
+            f"⚙️ Execution Mode: *{mode}* (Simulated Paper Trading)\n"
+            f"🌐 Bias: *{bias}* | Gap: {gap_pct:+.2f}%\n"
+            f"📊 Prev Close: {prev_close:.2f} | Open: {today_open:.2f}\n"
+            f"⚡ India VIX: {vix:.1f}{vix_note}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌅 Morning Session: 09:00 – 17:00 IST (Base & Structure)\n"
+            f"🌙 Evening Session: 17:00 – 23:00 IST (🔥 Primary Trading Window)\n"
+            f"🛑 EOD Cutoff: 23:15 IST | Close: 23:30 IST\n"
+            f"📌 Strategy Note: High-probability setups & volume trigger mostly in the Evening Session in {mode} mode."
         )
         await self.bus.publish(Topic.ALERT,
             {"type": "morning_brief", "text": brief}, self.NAME)
+        self._brief_published_date = self._today
 
-        if LLM_ENABLED:
+        if LLM_ENABLED and is_open:
             asyncio.create_task(self._morning_llm(bias, vix, gap_pct))
 
     async def _morning_llm(self, bias: str, vix: float, gap_pct: float) -> None:
@@ -693,7 +717,7 @@ class AnalyticsAgent:
         p_txt.write_text(rich_report_clean)
 
         eod_text = (
-            f" *SignalForge EOD  {self._today}*\n"
+            f"📊 *MCXForge EOD — {self._today}*\n"
             f"```\n{rich_report_clean}\n```\n"
             f"[FEED] Signals: {s['signals']} | [OK] Approved: {s['approved']}\n"
             f"[PROGRESS] Traded: {s['traded']} | [GREEN] {s['wins']} wins | [RED] {s['losses']} losses"

@@ -863,7 +863,7 @@ def find_log_for_date(target_date: str, log_dir: Path) -> Path | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="SignalForge EOD Diagnostic Report"
+        description="MCXForge EOD Diagnostic Report"
     )
     parser.add_argument(
         "--date", "-d",

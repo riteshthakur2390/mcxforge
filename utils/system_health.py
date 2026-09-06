@@ -347,7 +347,7 @@ class GracefulShutdown:
         try:
             from utils.telegram_notifier import get_notifier
             msg = (
-                f"⚠️ *SignalForge Shutdown*\n"
+                f"⚠️ *MCXForge Shutdown*\n"
                 f"Reason: {reason}\n"
                 f"Time: {datetime.now(IST).strftime('%H:%M IST')}\n"
                 f"All positions closed. System stopped."

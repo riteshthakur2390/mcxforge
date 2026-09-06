@@ -569,16 +569,19 @@ class TelegramNotifier:
                     "NEUTRAL": "➡️ NEUTRAL"}.get(bias, bias)
 
         msg = (
-            f"🌅 *MCXForge Morning Brief*\n"
+            f"🌅 *MCXForge Daily Brief*\n"
             f"📅 {datetime.now(IST).strftime('%d %b %Y')}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 Commodity: SILVERM\n"
             f"🌐 Bias:    {bias_tag}\n"
             f"📊 Gap:     {gap_tag}\n"
             f"😰 VIX:     {vix:.1f}  {vix_tag}{vix_note}\n"
             f"🌏 Global:  {sgx}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚙️ Mode:    {mode}\n"
-            f"🕐 Window:  09:00 – 23:30 IST"
+            f"⚙️ Mode:    {mode} (Simulated Paper Execution)\n"
+            f"🕐 Hours:   09:00 – 23:30 IST\n"
+            f"🌙 Evening: 17:00 – 23:00 IST (🔥 Primary Trading Window)\n"
+            f"💡 Note:    Mostly trades in {mode} mode in Evening Session"
         )
         await self._send(msg, target=self._payload_target(payload))
 

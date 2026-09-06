@@ -29,6 +29,7 @@ DEFAULT_SOURCE_ENV = PROJECT_ROOT / ".env"
 PROJECTS_DIR = Path("/Users/vishranti/Downloads/projects")
 
 SIBLING_PROJECTS = [
+    PROJECTS_DIR / "signalforge",
     PROJECTS_DIR / "expiryforge",
     PROJECTS_DIR / "swingforge",
     PROJECTS_DIR / "thetaforge",
