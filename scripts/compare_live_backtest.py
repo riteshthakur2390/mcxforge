@@ -16,7 +16,7 @@ from utils.performance_review import build_live_vs_backtest_report
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare live vs backtest SignalForge performance")
+    parser = argparse.ArgumentParser(description="Compare live vs backtest MCXForge performance")
     parser.add_argument("--live-pattern", action="append", default=[])
     parser.add_argument("--backtest-pattern", action="append", default=[])
     parser.add_argument("--json", action="store_true")
@@ -36,7 +36,7 @@ def main() -> None:
     gaps = report["gaps"]
     readiness = report["automation_readiness"]
 
-    print("SignalForge Live vs Backtest")
+    print("MCXForge Live vs Backtest")
     print(f"Generated: {report['generated_at']}")
     print()
     print(

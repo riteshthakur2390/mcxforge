@@ -49,7 +49,7 @@ try:
 except ImportError:
     JOURNAL_DIR      = "journal"
     TOTAL_FUND       = float(os.getenv("TOTAL_FUND", 200000.0))
-    DEPLOYED_CAPITAL = float(os.getenv("DEPLOYED_CAPITAL", 30000.0))
+    DEPLOYED_CAPITAL = float(os.getenv("DEPLOYED_CAPITAL", 40000.0))
     TRADING_MODE     = os.getenv("TRADING_MODE", "AUTO")
 
 LIVE_CURVE_CSV  = Path(JOURNAL_DIR) / "equity_curve.csv"

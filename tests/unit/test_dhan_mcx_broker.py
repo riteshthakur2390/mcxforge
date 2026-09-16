@@ -37,9 +37,11 @@ def test_dhan_mcx_security_id_resolution():
     assert contract_sec == "562058"
 
     # Other commodities
-    assert broker.get_instrument_key("GOLD", exchange="MCX") == "495214"
-    assert broker.get_instrument_key("CRUDEOIL", exchange="MCX") == "562060"
-    assert broker.get_instrument_key("NATURALGAS", exchange="MCX") == "562061"
+    assert broker.get_instrument_key("GOLD", exchange="MCX") == "483079"
+    assert broker.get_instrument_key("CRUDEOIL", exchange="MCX") == "565899"
+    assert broker.get_instrument_key("NATURALGAS", exchange="MCX") == "568245"
+    assert broker.get_instrument_key("NATGASMINI", exchange="MCX") == "568246"
+    assert broker.get_instrument_key("NATGAS", exchange="MCX") == "568246"
 
     # Numeric security ID pass-through
     assert broker.get_instrument_key("562058") == "562058"
@@ -66,10 +68,10 @@ def test_dhan_mcx_ltp_routing(monkeypatch):
     ltp = broker.get_ltp("SILVERMIC")
     assert ltp == 85450.0
 
-    # Verify call payload sent MCX_COMM
+    # Verify call payload sent MCX_COMM with integer securityId
     called_payload = mock_post.call_args[1]["json"]
     assert Seg.MCX_COMM in called_payload
-    assert called_payload[Seg.MCX_COMM] == ["562058"]
+    assert called_payload[Seg.MCX_COMM] == [562058]
 
 
 def test_dhan_mcx_historical_chunk_payload(monkeypatch):
@@ -92,7 +94,7 @@ def test_dhan_mcx_historical_chunk_payload(monkeypatch):
     monkeypatch.setattr("requests.post", mock_post)
 
     # Test daily chunk (used for 5-year historical backtest data)
-    df_daily = broker._fetch_historical_chunk("SILVERMIC", "day", "2024-01-01", "2024-01-10")
+    df_daily = broker._fetch_historical_chunk("SILVERM", "day", "2024-01-01", "2024-01-10")
     assert not df_daily.empty
     assert len(df_daily) == 2
 
@@ -100,7 +102,16 @@ def test_dhan_mcx_historical_chunk_payload(monkeypatch):
     called_payload = mock_post.call_args[1]["json"]
     assert called_payload["exchangeSegment"] == Seg.MCX_COMM
     assert called_payload["instrument"] == "FUTCOM"
-    assert called_payload["securityId"] == "562058"
+    assert called_payload["securityId"] == "483080"
+
+    # Test NATGASMINI chunk payload routes to MCX_COMM
+    df_ng = broker._fetch_historical_chunk("NATGASMINI", "5minute", "2026-08-25", "2026-09-08")
+    assert not df_ng.empty
+    ng_payload = mock_post.call_args[1]["json"]
+    assert ng_payload["exchangeSegment"] == Seg.MCX_COMM
+    assert ng_payload["instrument"] == "FUTCOM"
+    assert ng_payload["securityId"] == "568246"
+    assert ng_payload["interval"] == "5"
 
 
 def test_dhan_mcx_order_placement_and_lot_sizing(monkeypatch):

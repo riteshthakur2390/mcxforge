@@ -50,7 +50,7 @@ def run_diagnostics(candle_count: int = 60):
 
     print()
     print("━" * 70)
-    print(f"  SignalForge — Strategy Diagnostics")
+    print(f"  MCXForge — Strategy Diagnostics")
     print(f"  Testing with {candle_count} candles")
     print("━" * 70)
     print()

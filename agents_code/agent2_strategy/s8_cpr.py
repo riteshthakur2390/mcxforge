@@ -117,9 +117,9 @@ class CPRStrategy:
             if os.path.exists(self._db_path):
                 with sqlite3.connect(self._db_path) as conn:
                     cur = conn.cursor()
-                    comm = os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERMIC")).upper()
+                    comm = os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM")).upper()
                     cur.execute(
-                        "SELECT ts, high, low, close FROM candles WHERE symbol IN (?, 'NIFTY') AND interval='day' ORDER BY ts ASC",
+                        "SELECT ts, high, low, close FROM candles WHERE symbol IN (?, 'SILVERM', 'NIFTY') AND interval='day' ORDER BY ts ASC",
                         (comm,),
                     )
                     for ts_str, h, l, c in cur.fetchall():

@@ -83,12 +83,8 @@ def format_rich_report(
 
     # Calculate Total Invested (Capital allocated for trading)
     max_margin_recorded = float(to_num("margin_used_inr").max()) if "margin_used_inr" in df.columns else 0.0
-    if max_margin_recorded > 0 or "margin_req" in df.columns:
-        # Commodity futures margin trading:
-        # Trade capital allocation is max 15% of paper_capital (Rs. 30,000 for 2L capital).
-        # We must NOT sum sequential margin over hundreds of trades (which yields turnover in crores).
-        per_trade_cap = paper_capital * 0.15 if paper_capital > 0 else 30000.0
-        total_invested_value = min(max_margin_recorded, per_trade_cap) if max_margin_recorded > 0 else per_trade_cap
+    if max_margin_recorded > 0:
+        total_invested_value = max_margin_recorded
     elif extra_summary and "total_invested" in extra_summary:
         total_invested_value = float(extra_summary["total_invested"])
     else:
@@ -244,9 +240,28 @@ def format_rich_report(
 
     # Section: Capital
     report.append(col("── CAPITAL REQUIREMENT ──────────────────────────────", C_BOLD))
-    report.append(f"Lots             : {lots} ({qty} units)")
-    display_max_margin = min(max_margin, paper_capital * 0.15) if paper_capital > 0 else min(max_margin, 30000.0)
-    report.append(f"Max margin seen  : Rs. {display_max_margin:,.0f} (Max 15% Budget: Rs. 30,000)")
+    if "lots" in df.columns and not df["lots"].empty:
+        min_l = int(df["lots"].min())
+        max_l = int(df["lots"].max())
+    else:
+        min_l = max_l = lots
+
+    if "quantity" in df.columns and "lots" in df.columns and not df.empty and (df["lots"] > 0).any():
+        valid_rows = df[df["lots"] > 0]
+        unit_per_lot = int(round(valid_rows["quantity"].iloc[0] / valid_rows["lots"].iloc[0]))
+    else:
+        unit_per_lot = qty // lots if lots > 0 else 5
+
+    if min_l == max_l:
+        lot_str = f"{min_l} ({min_l * unit_per_lot} units)"
+    else:
+        lot_str = f"{min_l} - {max_l} ({min_l * unit_per_lot} - {max_l * unit_per_lot} units)"
+    report.append(f"Lots             : {lot_str}")
+
+    actual_max_margin = float(df["margin_used_inr"].max()) if ("margin_used_inr" in df.columns and not df["margin_used_inr"].empty) else max_margin
+    margin_pct = (actual_max_margin / paper_capital * 100.0) if paper_capital > 0 else 0.0
+    budget_desc = f" ({margin_pct:.1f}% of capital)" if paper_capital > 0 else ""
+    report.append(f"Max margin seen  : Rs. {actual_max_margin:,.0f}{budget_desc}")
     report.append(f"Recommended Cap  : {col(f'Rs. {recommended_capital:,.0f}', C_YELLOW)} (Margin + DD Buffer)")
     report.append(f"Annual ROI       : {col(f'{roi_annual:.1f}%', C_BOLD + C_CYAN)}")
     report.append("")
@@ -254,10 +269,10 @@ def format_rich_report(
     # Section: Trade-wise
     report.append(col("── TRADE-WISE BREAKDOWN ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────", C_BOLD))
     table_header = (
-        f"{'Date':<10} | {'Symbol':<20} | {'Entry (T)':<9} | {'Exit (T)':<9} | "
-        f"{'Lots':<4} | {'Lane':<7} | {'Invested':<8} | {'Entry':<8} | {'Exit':<8} | {'Price':<8} | "
-        f"{'V':>2} | {'ML':>5} | {'Setup':<12} | {'Bias':<7} | {'Strategies':<34} | "
-        f"{'PnL%':<6} | {'Peak%':<6} | {'PnL(Rs)':<10} | {'Reason':<14}"
+        f"{'Date':<10} | {'Symbol':<24} | {'In (T)':<8} | {'Out (T)':<8} | "
+        f"{'Lots':<4} | {'Invested':<8} | {'Spot In':<8} | {'Spot Out':<8} | {'Opt In':<7} | {'Opt Out':<7} | "
+        f"{'V':>2} | {'ML':>4} | {'Setup':<11} | {'Strategies':<18} | "
+        f"{'Spot%':<6} | {'Opt%':<6} | {'OptPk%':<6} | {'Capt%':<5} | {'PnL(Rs)':<10} | {'Reason':<14}"
     )
     report.append(col(table_header, C_BOLD))
     report.append("-" * len(table_header))
@@ -278,8 +293,41 @@ def format_rich_report(
         exit_t = row['exit_time'].strftime("%H:%M:%S") if pd.notnull(row['exit_time']) else "N/A"
         
         symbol = str(row.get('option_symbol', row.get('symbol', 'N/A')))
-        price_val = float(row.get('nifty_price', row.get('nifty_ltp', row.get('entry_price', 0))))
-        price_str = f"{price_val:>8.1f}"
+        
+        # Prices: Spot (Underlying) & Option (Contract)
+        spot_in = float(row.get('underlying_entry', row.get('entry_price', 0)) or 0)
+        spot_out = float(row.get('underlying_exit', row.get('exit_price', 0)) or 0)
+        if spot_out <= 0:
+            pnl_pts = float(row.get('pnl_points', 0) or 0)
+            is_buy = 'BUY' in str(row.get('direction', '')) or 'CALL' in str(row.get('direction', ''))
+            spot_out = spot_in + pnl_pts if is_buy else spot_in - pnl_pts
+
+        opt_in = float(row.get('actual_premium', row.get('entry_premium', 0)) or 0)
+        opt_out = float(row.get('exit_premium', 0) or 0)
+        if opt_out <= 0:
+            opt_out = opt_in + (float(row.get('pnl_points', 0) or 0) * 0.50)
+
+        # Performance percentages
+        spot_pnl_pct = float(row.get('pnl_pct', 0.0) or 0.0)
+        opt_pnl_pct = ((opt_out - opt_in) / opt_in * 100.0) if opt_in > 0 else spot_pnl_pct
+
+        # Peak & Capture
+        mfe_pts = float(row.get('mfe_pts', 0) or 0)
+        opt_peak_pts = mfe_pts * 0.50
+        opt_peak_pct = (opt_peak_pts / opt_in * 100.0) if opt_in > 0 else (mfe_pts / spot_in * 100.0 if spot_in > 0 else 0.0)
+        
+        # Realized net capture percentage: actual net rupee profit vs peak potential rupee gain
+        trade_lots_val = 1
+        try:
+            trade_lots_val = int(float(row.get('lots', 1) or 1))
+        except Exception:
+            trade_lots_val = 1
+        peak_gain_inr = opt_peak_pts * (trade_lots_val * 5)
+        if peak_gain_inr > 0 and pnl_val > 0:
+            capt_pct = (pnl_val / peak_gain_inr) * 100.0
+        else:
+            capt_pct = 0.0
+        capt_pct = min(100.0, max(0.0, capt_pct))
         
         # Invested Calculation
         trade_lots = row.get('lots')
@@ -297,46 +345,58 @@ def format_rich_report(
         except Exception:
             invested = 0.0
         if invested <= 0:
-            invested = float(row['actual_premium']) * trade_lots * 0.10
-        # Enforce max 15% trade allocation (Rs. 30,000 for 2L capital)
-        trade_cap = paper_capital * 0.15 if paper_capital > 0 else 30000.0
-        invested = min(invested, trade_cap)
+            lot_size = float(row.get("lot_size", 5) or 5)
+            invested = opt_in * trade_lots * lot_size
 
         votes = int(float(row.get("votes", 0) or 0))
         ml_rank = float(row.get("ml_rank_score", row.get("ml_confidence", row.get("ml_prob", 0))) or 0)
-        setup = short_text(row.get("setup_type", "-"), 12)
-        bias = short_text(row.get("structure_bias", row.get("session", row.get("regime", "-"))), 7)
+        setup = short_text(row.get("setup_type", "-"), 11)
+
+        # Single-row strategy formatting e.g. TrendFollowing/xyz+
         raw_strats = row.get("strategy_combo", row.get("strategies_fired", "-"))
+        strat_list = []
         if isinstance(raw_strats, list):
-            raw_strats = "+".join(raw_strats)
-        strategies = short_text(raw_strats, 34)
-        lane_val = str(row.get("budget_lane", "") or "").strip().upper()
-        ml_dec_str = str(row.get("ml_decision_reason", "") or "").upper() + str(row.get("ml_decision", "") or "").upper()
-        if "REDUCED" in ml_dec_str:
-            lane_val = "REDUCED"
-        elif not lane_val or lane_val == "NAN":
-            lane_val = "FULL"
-        lane_str = short_text(lane_val, 7)
-        peak_val = float(row.get("peak_pnl", row.get("peak_pnl_pct", row.get("pnl_pct", 0.0))) or 0.0)
+            strat_list = [str(s).strip() for s in raw_strats if str(s).strip()]
+        elif isinstance(raw_strats, str):
+            s_clean = raw_strats.strip()
+            if s_clean.startswith("[") and s_clean.endswith("]"):
+                import ast
+                try:
+                    strat_list = [str(s).strip() for s in ast.literal_eval(s_clean)]
+                except Exception:
+                    strat_list = [s.strip(" '\"") for s in s_clean[1:-1].split(",") if s.strip(" '\"")]
+            elif "+" in s_clean:
+                strat_list = [s.strip() for s in s_clean.split("+") if s.strip()]
+            elif s_clean and s_clean != "-":
+                strat_list = [s_clean]
+
+        lead_strat = str(row.get("lead_strategy") or (strat_list[0] if strat_list else "—")).strip()
+        if len(strat_list) > 1:
+            second_cand = [s for s in strat_list if s != lead_strat]
+            sec_name = second_cand[0][:4] if second_cand else f"+{len(strat_list)-1}"
+            strat_display = f"{lead_strat[:11]}/{sec_name}+"
+        else:
+            strat_display = lead_strat[:18]
         
         row_str = (
             f"{str(row['entry_time'].date()):<10} | "
-            f"{symbol:<20} | "
-            f"{entry_t[:8]:<9} | "
-            f"{exit_t[:8]:<9} | "
+            f"{short_text(symbol, 24):<24} | "
+            f"{entry_t[:8]:<8} | "
+            f"{exit_t[:8]:<8} | "
             f"{trade_lots:<4} | "
-            f"{lane_str:<7} | "
             f"{invested:>8.0f} | "
-            f"{float(row['actual_premium']):>8.1f} | "
-            f"{float(row['exit_premium']):>8.1f} | "
-            f"{price_str} | "
+            f"{spot_in:>8.1f} | "
+            f"{spot_out:>8.1f} | "
+            f"{opt_in:>7.1f} | "
+            f"{opt_out:>7.1f} | "
             f"{votes:>2} | "
-            f"{ml_rank:>5.2f} | "
-            f"{setup:<12} | "
-            f"{bias:<7} | "
-            f"{strategies:<34} | "
-            f"{float(row['pnl_pct']):>5.1f}% | "
-            f"{peak_val:>5.1f}% | "
+            f"{ml_rank:>4.2f} | "
+            f"{setup:<11} | "
+            f"{strat_display:<18} | "
+            f"{spot_pnl_pct:>+5.1f}% | "
+            f"{opt_pnl_pct:>+5.1f}% | "
+            f"{opt_peak_pct:>5.1f}% | "
+            f"{capt_pct:>4.0f}% | "
             f"{col(pnl_str.rjust(10), pnl_col)} | "
             f"{str(row['exit_reason'])[:14]:<14}"
         )

@@ -4,10 +4,10 @@ from config.settings.utils import *
 
 
 
-MIN_STRATEGY_VOTES = 4
+MIN_STRATEGY_VOTES = int(os.getenv("MIN_STRATEGY_VOTES", "5"))
 ALLOW_SUBMIN_VOTE_EARLY_TRIGGER = os.getenv(
     "ALLOW_SUBMIN_VOTE_EARLY_TRIGGER",
-    "true",
+    "false",
 ).lower() in {"1", "true", "yes", "on"}
 
 MIN_STRATEGY_CONF = 0.45

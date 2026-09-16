@@ -147,9 +147,11 @@ def run_audit(send_telegram: bool = False):
         from pathlib import Path
         from ml.model import SignalForgeEnsemble
         ensemble = SignalForgeEnsemble()
-        model_p = Path("ml/saved_models/silvermic_5minute.pkl")
+        model_p = Path("ml/saved_models/silverm_5minute.pkl")
         if not model_p.exists():
-            model_p = Path("ml/saved_models/nifty_5minute.pkl")
+            model_p = Path("ml/saved_models/silvermic_5minute.pkl")
+        if not model_p.exists():
+            model_p = Path("ml/saved_models/commodity_5minute.pkl")
         loaded = ensemble.load(model_p)
         print(f"  ✓ ML Ensemble loaded ({model_p.name}): models={list(ensemble.models.keys())} | features={len(ensemble.feature_cols)}")
         assert loaded, f"Failed to load ML model file {model_p}"

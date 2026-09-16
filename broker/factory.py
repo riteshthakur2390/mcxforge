@@ -110,3 +110,6 @@ def reset_broker() -> None:
     """Force re-initialization on next get_broker() call. Use in tests only."""
     global _broker_instance
     _broker_instance = None
+
+
+create_broker = get_broker

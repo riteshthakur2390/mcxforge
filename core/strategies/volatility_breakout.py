@@ -96,6 +96,13 @@ class VolatilityBreakoutStrategy(BaseCommodityStrategy):
         data["recent_high"] = h.rolling(self.parameters["compression_lookback"], min_periods=1).max().shift(1)
         data["recent_low"] = l.rolling(self.parameters["compression_lookback"], min_periods=1).min().shift(1)
 
+        # 7. Stochastic momentum (merged from BBSqueeze)
+        low_14 = l.rolling(14, min_periods=1).min()
+        high_14 = h.rolling(14, min_periods=1).max()
+        stoch_denom = (high_14 - low_14).replace(0, 1e-6)
+        data["stoch_k"] = 100.0 * (c - low_14) / stoch_denom
+        data["stoch_d"] = data["stoch_k"].rolling(3, min_periods=1).mean()
+
         return data
 
     def generate_signal(
@@ -176,13 +183,20 @@ class VolatilityBreakoutStrategy(BaseCommodityStrategy):
         is_expanding_bar = tr >= self.parameters["expansion_bar_mult"] * atr
         is_expanding_vol = vol_ratio >= self.parameters["volume_expansion_mult"]
 
+        stoch_k = float(curr["stoch_k"]) if "stoch_k" in curr else 50.0
+        indicators_snapshot["stoch_k"] = round(stoch_k, 1)
+
         # Long Breakout: Close breaking above compression ceiling with expansion
         if close > recent_high and (is_expanding_bar or is_expanding_vol):
             entry_price = self.round_to_tick(close)
             sl = self.calculate_stop_loss(entry_price, Direction.BUY, atr, data)
             target = self.calculate_target(entry_price, sl, Direction.BUY)
             rr = round(abs(target - entry_price) / max(abs(entry_price - sl), 1e-6), 2)
-            conf = min(0.95, round(0.65 + min(vol_ratio * 0.1, 0.25), 2))
+            stoch_bonus = 0.08 if stoch_k >= 50.0 else 0.0
+            conf = min(0.95, round(0.65 + min(vol_ratio * 0.1, 0.25) + stoch_bonus, 2))
+            reason_str = f"Volatility expansion breakout above compression box {recent_high:.1f} (Vol {vol_ratio:.1f}x, ATR ratio {atr_ratio:.2f})"
+            if stoch_k >= 50.0:
+                reason_str += f" | Confirmed by Stoch momentum ({stoch_k:.1f} >= 50)"
 
             return StrategySignal(
                 timestamp=now_ts,
@@ -197,7 +211,7 @@ class VolatilityBreakoutStrategy(BaseCommodityStrategy):
                 target=target,
                 risk_reward=rr,
                 regime=regime_details.regime if regime_details else MarketRegime.BREAKOUT,
-                reason=f"Volatility expansion breakout above compression box {recent_high:.1f} (Vol {vol_ratio:.1f}x, ATR ratio {atr_ratio:.2f})",
+                reason=reason_str,
                 indicators=indicators_snapshot,
                 decision="TRADE",
                 is_valid=True,
@@ -209,7 +223,11 @@ class VolatilityBreakoutStrategy(BaseCommodityStrategy):
             sl = self.calculate_stop_loss(entry_price, Direction.SELL, atr, data)
             target = self.calculate_target(entry_price, sl, Direction.SELL)
             rr = round(abs(entry_price - target) / max(abs(sl - entry_price), 1e-6), 2)
-            conf = min(0.95, round(0.65 + min(vol_ratio * 0.1, 0.25), 2))
+            stoch_bonus = 0.08 if stoch_k <= 50.0 else 0.0
+            conf = min(0.95, round(0.65 + min(vol_ratio * 0.1, 0.25) + stoch_bonus, 2))
+            reason_str = f"Volatility expansion breakdown below compression box {recent_low:.1f} (Vol {vol_ratio:.1f}x, ATR ratio {atr_ratio:.2f})"
+            if stoch_k <= 50.0:
+                reason_str += f" | Confirmed by Stoch momentum ({stoch_k:.1f} <= 50)"
 
             return StrategySignal(
                 timestamp=now_ts,
@@ -224,7 +242,7 @@ class VolatilityBreakoutStrategy(BaseCommodityStrategy):
                 target=target,
                 risk_reward=rr,
                 regime=regime_details.regime if regime_details else MarketRegime.BREAKOUT,
-                reason=f"Volatility expansion breakdown below compression box {recent_low:.1f} (Vol {vol_ratio:.1f}x, ATR ratio {atr_ratio:.2f})",
+                reason=reason_str,
                 indicators=indicators_snapshot,
                 decision="TRADE",
                 is_valid=True,

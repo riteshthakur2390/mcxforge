@@ -75,7 +75,7 @@ REDIRECT_URI = "http://localhost:8080/"
 
 print()
 print("╔════════════════════════════════════════════════╗")
-print("║   SignalForge — Upstox Daily Auth              ║")
+print("║   MCXForge — Upstox Daily Auth                 ║")
 print(f"║   {datetime.now(IST).strftime('%Y-%m-%d  %H:%M IST')}                        ║")
 print("╚════════════════════════════════════════════════╝")
 print()

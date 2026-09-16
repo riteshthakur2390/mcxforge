@@ -79,7 +79,7 @@ def report(df: pd.DataFrame) -> None:
 
     print()
     print("━" * 65)
-    print("  SignalForge — Weekly Trade Analysis")
+    print("  MCXForge — Weekly Trade Analysis")
     print("━" * 65)
     print(f"  Trades: {total} | Wins: {wins} | Win Rate: {wr:.1f}% | Avg PnL: {avg_pnl:.1f}%")
     print()

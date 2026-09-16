@@ -93,7 +93,10 @@ class OpeningRangeBreakoutStrategy(BaseCommodityStrategy):
         if day_df.empty:
             return None, None, None
 
-        session_start = datetime.combine(today_date, open_time).replace(tzinfo=IST)
+        if getattr(df.index, "tz", None) is not None:
+            session_start = datetime.combine(today_date, open_time).replace(tzinfo=df.index.tz)
+        else:
+            session_start = datetime.combine(today_date, open_time)
         orb_end = session_start + timedelta(minutes=orb_duration)
 
         orb_candles = day_df[(day_df.index >= session_start) & (day_df.index <= orb_end)]
@@ -165,6 +168,29 @@ class OpeningRangeBreakoutStrategy(BaseCommodityStrategy):
         min_range = self.parameters["min_range_atr_mult"] * atr
         max_range = self.parameters["max_range_atr_mult"] * atr
 
+        # Prior Day Range Location Bias (merged from OpeningRangeBias)
+        prev_day_bias = "NEUTRAL"
+        if len(df) > 20:
+            today_date = now_ts.date() if hasattr(now_ts, "date") else None
+            if today_date:
+                prev_day_mask = [idx.date() < today_date if hasattr(idx, "date") else False for idx in df.index]
+                prev_day_candles = df[prev_day_mask]
+                if len(prev_day_candles) >= 5:
+                    prev_date = prev_day_candles.index[-1].date()
+                    prev_session = prev_day_candles[[idx.date() == prev_date for idx in prev_day_candles.index]]
+                    prev_high = float(prev_session["high"].max())
+                    prev_low = float(prev_session["low"].min())
+                    prev_range = prev_high - prev_low
+                    if prev_range > 0:
+                        today_candles = df[[idx.date() == today_date for idx in df.index]]
+                        if len(today_candles) > 0:
+                            today_open = float(today_candles["open"].iloc[0])
+                            open_pos = (today_open - prev_low) / prev_range
+                            if open_pos >= 0.70:
+                                prev_day_bias = "BULL"
+                            elif open_pos <= 0.30:
+                                prev_day_bias = "BEAR"
+
         indicators_snapshot = {
             "close": close,
             "orb_high": round(orb_high, 2),
@@ -173,6 +199,7 @@ class OpeningRangeBreakoutStrategy(BaseCommodityStrategy):
             "atr": round(atr, 2),
             "buffer": round(buffer, 2),
             "vol_ratio": round(vol_ratio, 2),
+            "prev_day_bias": prev_day_bias,
         }
 
         if orb_range < min_range:
@@ -192,7 +219,11 @@ class OpeningRangeBreakoutStrategy(BaseCommodityStrategy):
             sl = self.calculate_stop_loss(entry_price, Direction.BUY, atr, data)
             target = self.calculate_target(entry_price, sl, Direction.BUY)
             rr = round(abs(target - entry_price) / max(abs(entry_price - sl), 1e-6), 2)
-            conf = min(0.95, round(0.65 + min(vol_ratio * 0.1, 0.25), 2))
+            bias_bonus = 0.08 if prev_day_bias == "BULL" else 0.0
+            conf = min(0.95, round(0.65 + min(vol_ratio * 0.1, 0.25) + bias_bonus, 2))
+            reason_str = f"Bullish ORB Breakout above {orb_high:.1f} + {buffer:.1f} with {vol_ratio:.1f}x volume"
+            if prev_day_bias == "BULL":
+                reason_str += " | Confirmed by Prior Day Upper 30% Open Location Bias"
 
             return StrategySignal(
                 timestamp=now_ts,
@@ -207,7 +238,7 @@ class OpeningRangeBreakoutStrategy(BaseCommodityStrategy):
                 target=target,
                 risk_reward=rr,
                 regime=regime_details.regime if regime_details else MarketRegime.BREAKOUT,
-                reason=f"Bullish ORB Breakout above {orb_high:.1f} + {buffer:.1f} with {vol_ratio:.1f}x volume",
+                reason=reason_str,
                 indicators=indicators_snapshot,
                 decision="TRADE",
                 is_valid=True,
@@ -219,8 +250,12 @@ class OpeningRangeBreakoutStrategy(BaseCommodityStrategy):
             entry_price = self.round_to_tick(close)
             sl = self.calculate_stop_loss(entry_price, Direction.SELL, atr, data)
             target = self.calculate_target(entry_price, sl, Direction.SELL)
-            rr = round(abs(entry_price - target) / max(abs(sl - entry_price), 1e-6), 2)
-            conf = min(0.95, round(0.65 + min(vol_ratio * 0.1, 0.25), 2))
+            rr = round(abs(target - entry_price) / max(abs(entry_price - sl), 1e-6), 2)
+            bias_bonus = 0.08 if prev_day_bias == "BEAR" else 0.0
+            conf = min(0.95, round(0.65 + min(vol_ratio * 0.1, 0.25) + bias_bonus, 2))
+            reason_str = f"Bearish ORB Breakdown below {orb_low:.1f} - {buffer:.1f} with {vol_ratio:.1f}x volume"
+            if prev_day_bias == "BEAR":
+                reason_str += " | Confirmed by Prior Day Lower 30% Open Location Bias"
 
             return StrategySignal(
                 timestamp=now_ts,
@@ -235,11 +270,12 @@ class OpeningRangeBreakoutStrategy(BaseCommodityStrategy):
                 target=target,
                 risk_reward=rr,
                 regime=regime_details.regime if regime_details else MarketRegime.BREAKOUT,
-                reason=f"Bearish ORB Breakdown below {orb_low:.1f} - {buffer:.1f} with {vol_ratio:.1f}x volume",
+                reason=reason_str,
                 indicators=indicators_snapshot,
                 decision="TRADE",
                 is_valid=True,
             )
+
 
         empty_signal.indicators = indicators_snapshot
         empty_signal.rejection_reason = "NO_ORB_BREAKOUT"

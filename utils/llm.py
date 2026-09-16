@@ -90,17 +90,19 @@ def build_signal_rationale_prompt(
     strategies: list[str],
     confidence: float,
     votes: int,
-    nifty_ltp: float,
+    price: float,
     adx: float = 0,
     metadata: Union[dict, None] = None,
+    symbol: str = "",
 ) -> str:
+    sym = symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))
     meta_str = str(metadata or {})
-    return f"""You are a NIFTY options signal analyst. Write a 2-sentence plain-English
+    return f"""You are an MCX commodity trading analyst. Write a 2-sentence plain-English
 explanation of why this signal fired. Be direct. No jargon.
 
 Direction: {direction}
-NIFTY price: {nifty_ltp}
-Strategies that agreed: {', '.join(strategies)} ({votes}/5 votes)
+{sym} price: ₹{price:,.2f}
+Strategies that agreed: {', '.join(strategies)} ({votes} votes)
 Overall confidence: {confidence:.0%}
 ADX: {adx:.1f}
 Indicator details: {meta_str}
@@ -117,11 +119,13 @@ def build_eod_analysis_prompt(
     losses: int,
     win_rate: float,
     journal_summary: str,
+    symbol: str = "",
 ) -> str:
-    return f"""You are a NIFTY trading analyst reviewing today's SignalForge performance.
+    sym = symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))
+    return f"""You are an MCX commodity trading analyst reviewing today's MCXForge {sym} performance.
 
 Date: {date}
-Signals generated: {signals} | Suppressed (choppy): {suppressed}
+Signals generated: {signals} | Suppressed (choppy/filtered): {suppressed}
 Wins: {wins} | Losses: {losses} | Win rate: {win_rate:.1f}%
 
 Signal log:
@@ -129,27 +133,26 @@ Signal log:
 
 Write exactly 3 sentences:
 1. Overall performance summary for today.
-2. What worked or didn't (which strategies, what time of day).
+2. What worked or didn't (which strategies, what session/time of day).
 3. One specific suggestion for tomorrow's session.
 Return plain text only. No bullets. Each sentence must be complete and end with a period."""
 
 
 def build_morning_outlook_prompt(
-    bias: str, vix: float, gap_pct: float
+    bias: str, volatility_info: Union[float, str], gap_pct: float, symbol: str = ""
 ) -> str:
-    raw_vix = float(vix or 0.0)
-    safe_vix = raw_vix if 8.0 <= raw_vix <= 80.0 else 14.0
-    vix_source_note = "" if 8.0 <= raw_vix <= 80.0 else " (fallback; live VIX unavailable)"
-    return f"""You are a NIFTY market analyst. Write a 3-sentence morning outlook
-for a retail options trader. Be direct, no fluff.
+    sym = symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))
+    vol_str = f"{volatility_info:.1f}" if isinstance(volatility_info, (int, float)) else str(volatility_info)
+    return f"""You are an MCX commodity market analyst. Write a 3-sentence morning outlook
+for an MCX {sym} trader. Be direct, no fluff.
 
 Pre-market bias: {bias}
-India VIX: {safe_vix:.1f}{vix_source_note}
+Market Volatility / ATR: {vol_str}
 Gap vs previous close: {gap_pct:+.2f}%
 
-Sentence 1: What today's indicators suggest for the session.
-Sentence 2: Whether this looks like a trending or choppy day.
-Sentence 3: One actionable tip (e.g. 'wait for ORB', 'tight SL today').
+Sentence 1: What today's commodity indicators suggest for the session.
+Sentence 2: Whether this looks like a trending or range-bound day.
+Sentence 3: One actionable tip (e.g. 'wait for session breakout', 'strictly respect SL today').
 Return plain text only. No bullets. Each sentence must be complete and end with a period."""
 
 

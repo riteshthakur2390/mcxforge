@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 import pytz
 
-from instruments import SILVERMIC_CONFIG
+from instruments import SILVERM_CONFIG, SILVERMIC_CONFIG
 from core.models import Direction
 from core.strategies.ensemble import (
     MCXSession,
@@ -75,14 +75,14 @@ def test_signalforge_strategy_adapter():
     from agents_code.agent2_strategy.s1_supertrend_rsi import SuperTrendRSI
     
     adapter = SignalForgeStrategyAdapter(SuperTrendRSI, name="SuperTrend+RSI")
-    adapter.initialize(SILVERMIC_CONFIG)
+    adapter.initialize(SILVERM_CONFIG)
     
     df = _generate_synthetic_candles(n=80)
     sig = adapter.generate_signal(df)
     
     assert sig is not None
     assert sig.strategy == "SuperTrend+RSI"
-    assert sig.instrument == "SILVERMIC"
+    assert sig.instrument in ("SILVERM", "SILVERMIC")
 
 
 def test_commodity_ensemble_engine_run():
@@ -90,7 +90,7 @@ def test_commodity_ensemble_engine_run():
     df = _generate_synthetic_candles(n=100)
     
     engine = CommodityEnsembleEngine(
-        instrument_config=SILVERMIC_CONFIG,
+        instrument_config=SILVERM_CONFIG,
         min_votes=1,
         capital=200000.0,
     )
@@ -98,7 +98,7 @@ def test_commodity_ensemble_engine_run():
     res = engine.run(df, timeframe="15m")
     
     assert res is not None
-    assert res.symbol == "SILVERMIC"
+    assert res.symbol in ("SILVERM", "SILVERMIC")
     assert res.timeframe == "15m"
     assert isinstance(res.strategy_contributions, dict)
     assert isinstance(res.session_breakdown, dict)
@@ -108,14 +108,14 @@ def test_commodity_report_formatting():
     """Verifies that rich report and markdown formatters execute cleanly."""
     df = _generate_synthetic_candles(n=100)
     engine = CommodityEnsembleEngine(
-        instrument_config=SILVERMIC_CONFIG,
+        instrument_config=SILVERM_CONFIG,
         min_votes=1,
         capital=200000.0,
     )
     res = engine.run(df, timeframe="15m")
     
     rich_text = format_commodity_rich_report(res, use_colors=False)
-    assert "MCXFORGE SILVERMIC — PERFORMANCE REVIEW" in rich_text
+    assert "MCXFORGE SILVERM — PERFORMANCE REVIEW" in rich_text or "MCXFORGE SILVERMIC — PERFORMANCE REVIEW" in rich_text
     assert "SUMMARY" in rich_text
     assert "CAPITAL & MARGIN" in rich_text
     

@@ -657,7 +657,7 @@ def reconcile_all():
     ]
 
     starting_capital = float(os.getenv("TOTAL_FUND", 200000.0))
-    deployed_capital = float(os.getenv("DEPLOYED_CAPITAL", 30000.0))
+    deployed_capital = float(os.getenv("DEPLOYED_CAPITAL", 40000.0))
     current_equity = starting_capital
     running_max_equity = starting_capital
     max_dd = 0.0

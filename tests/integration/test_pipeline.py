@@ -180,7 +180,7 @@ class TestOptionUtils:
     def test_expiry_uses_tuesday_weekly_rule(self):
         from utils.option_utils import get_nearest_expiry
         for _ in range(5):
-            expiry, dte = get_nearest_expiry(min_days=1)
+            expiry, dte = get_nearest_expiry(min_days=1, symbol="NIFTY")
             assert expiry.weekday() in {0, 1}, "Expiry must resolve to Tuesday or prior trading day"
 
     def test_symbol_format(self):

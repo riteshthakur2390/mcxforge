@@ -134,8 +134,9 @@ class OIAnalysisStrategy:
             return none
 
         # LOGGING
+        sym = os.getenv("INSTRUMENT", "SILVERM")
         logger.info(
-            f"[S13-OI-IV] NIFTY={close:.1f} | ATM={atm} | "
+            f"[S13-OI-IV] {sym}={close:.1f} | ATM={atm} | "
             f"CE_OI_CHG: ATM={ce_atm_chg:.1f}%, ITM({itm1_ce})={ce_itm_chg or 0:.1f}%, OTM({otm1_ce})={ce_otm_chg or 0:.1f}% | "
             f"PE_OI_CHG: ATM={pe_atm_chg:.1f}%, ITM({itm1_pe})={pe_itm_chg or 0:.1f}%, OTM({otm1_pe})={pe_otm_chg or 0:.1f}% | "
             f"IV: CE={ce_iv:.2f}, PE={pe_iv:.2f}"

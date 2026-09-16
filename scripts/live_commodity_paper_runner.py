@@ -2,7 +2,7 @@
 scripts/live_commodity_paper_runner.py — Live Commodity Paper & Shadow Trading Runner
 =====================================================================================
 Connects MCXForge to live market feeds (Dhan API) for real-time paper trading and observation:
-1. Subscribes to live MCX SILVERMIC ticks (09:00 - 23:30 IST)
+1. Subscribes to live MCX SILVERM ticks (09:00 - 23:30 IST)
 2. Builds real-time 15m/5m candles
 3. Fires Unified Multi-Strategy Commodity Ensemble on candle close
 4. Simulates paper fills with realistic bid/ask spread, 1-tick slippage, and statutory MCX costs
@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from instruments import SILVERMIC_CONFIG, get_instrument_config
+from instruments import SILVERM_CONFIG, get_instrument_config
 from instruments.registry import resolve_active_contract
 from core.models import Direction
 from core.regime.engine import MarketRegimeEngine
@@ -82,7 +82,7 @@ class LivePaperPosition:
 class LiveCommodityPaperRunner:
     """
     Live Paper Trading and Observation Engine for MCX Commodity Futures.
-    Enforces minimum vote consensus, ML confidence gate (>= 0.28), and risk budget capping.
+    Enforces minimum vote consensus, ML confidence gate (>= 0.32), and risk budget capping.
     """
 
     def __init__(
@@ -93,8 +93,8 @@ class LiveCommodityPaperRunner:
         capital: float = 200_000.0,
         lots: int = 1,
         min_votes: int = 5,
-        min_ml_conf: float = 0.28,
-        max_cap_pct: float = 15.0,
+        min_ml_conf: float = float(os.getenv("MIN_ML_CONF", "0.32")),
+        max_cap_pct: float = float(os.getenv("MAX_CAP_PCT", "20.0")),
         allowed_sessions: Optional[List[MCXSession]] = None,
         journal_file: str = "state/live_paper_journal.json",
     ):
@@ -106,14 +106,14 @@ class LiveCommodityPaperRunner:
         self.min_votes = min_votes
         self.min_ml_conf = min_ml_conf
         self.max_cap_pct = max_cap_pct
-        self.max_capital_per_trade = capital * (max_cap_pct / 100.0)  # Capped strictly at 15% = Rs. 30,000
-        self.allowed_sessions = allowed_sessions or [MCXSession.EVENING]
+        self.max_capital_per_trade = capital * (max_cap_pct / 100.0)  # Capped strictly at 20% = Rs. 40,000
+        self.allowed_sessions = allowed_sessions or [MCXSession.MORNING, MCXSession.AFTERNOON, MCXSession.EVENING]
         self.journal_file = journal_file
 
         try:
             self.config = get_instrument_config(symbol)
         except Exception:
-            self.config = SILVERMIC_CONFIG
+            self.config = SILVERM_CONFIG
 
         self.strategies = build_quality_strategy_suite()
         self.regime_engine = MarketRegimeEngine()
@@ -126,7 +126,9 @@ class LiveCommodityPaperRunner:
 
         # Agent 3 ML Ensemble Gatekeeper
         self.ml_ensemble = SignalForgeEnsemble()
-        ml_path = Path("ml/saved_models/silvermic_5minute.pkl")
+        ml_path = Path("ml/saved_models/silverm_5minute.pkl")
+        if not ml_path.exists():
+            ml_path = Path("ml/saved_models/silvermic_5minute.pkl")
         self.ml_loaded = self.ml_ensemble.load(ml_path) if ml_path.exists() else False
         if self.ml_loaded:
             logger.info(f"Loaded ML Ensemble for live gatekeeping: {ml_path} (Threshold >= {self.min_ml_conf})")
@@ -138,6 +140,7 @@ class LiveCommodityPaperRunner:
         self.closed_trades: List[Dict[str, Any]] = []
         self.candle_buffer: List[Dict[str, Any]] = []
         self.strategy_health_file = Path("state/strategy_health.json")
+        self.current_trade_date: str = datetime.now(IST).strftime("%Y-%m-%d")
         self.strategy_health: Dict[str, Dict[str, int]] = {
             strat.name: {"evaluated": 0, "voted": 0, "skipped": 0, "errors": 0}
             for strat in self.strategies
@@ -146,11 +149,26 @@ class LiveCommodityPaperRunner:
         self._save_journal()
         self._load_strategy_health()
 
+    def reset_daily_health(self, status: str = "ACTIVE") -> None:
+        """Reset all strategy telemetry counters for a fresh trading day."""
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+        self.strategy_health = {
+            strat.name: {"evaluated": 0, "voted": 0, "skipped": 0, "errors": 0}
+            for strat in self.strategies
+        }
+        self._save_strategy_health(status=status)
+
     def _load_strategy_health(self) -> None:
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
         if self.strategy_health_file.exists():
             try:
                 with open(self.strategy_health_file, "r") as f:
                     data = json.load(f)
+                    file_date = data.get("date")
+                    file_status = data.get("status")
+                    if file_date != today_str or file_status == "EOD_CLOSED":
+                        self.reset_daily_health(status="ACTIVE")
+                        return
                     loaded = data.get("strategies", {})
                     for name, stats in loaded.items():
                         if name in self.strategy_health:
@@ -162,12 +180,18 @@ class LiveCommodityPaperRunner:
                             }
             except Exception as e:
                 logger.debug(f"Could not load existing strategy health: {e}")
+                self.reset_daily_health(status="ACTIVE")
+        else:
+            self.reset_daily_health(status="ACTIVE")
 
-    def _save_strategy_health(self) -> None:
+    def _save_strategy_health(self, status: str = "ACTIVE") -> None:
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
         try:
             self.strategy_health_file.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 "symbol": self.symbol,
+                "date": today_str,
+                "status": status,
                 "timestamp": datetime.now(IST).isoformat(),
                 "strategies": self.strategy_health,
             }
@@ -176,31 +200,48 @@ class LiveCommodityPaperRunner:
         except Exception as e:
             logger.debug(f"Could not save strategy health: {e}")
 
-    def warmup_evaluation(self, historical_csv: Optional[str] = None) -> None:
-        """Evaluates strategies against latest historical candle slice to prime telemetry."""
-        csv_path = historical_csv or "data/historical/SILVERMIC_dhan_5m.csv"
+    def warmup_evaluation(self, historical_csv: Optional[str] = None, sample_bars: int = 50) -> None:
+        """Evaluates strategies against latest historical candle slices to prime telemetry."""
+        csv_path = historical_csv or "data/historical/SILVERM_dhan_5m.csv"
+        if not Path(csv_path).exists():
+            csv_path = "data/historical/SILVERMIC_dhan_5m.csv"
         p = Path(csv_path)
         if not p.exists():
             return
         try:
             raw_df = pd.read_csv(p)
-            slice_df = raw_df.tail(100).copy()
-            regime_info = self.regime_engine.classify(slice_df)
+            if "timestamp" in raw_df.columns:
+                raw_df["datetime"] = pd.to_datetime(raw_df["timestamp"])
+                raw_df = raw_df.set_index("datetime").sort_index()
+            elif "date" in raw_df.columns:
+                raw_df["datetime"] = pd.to_datetime(raw_df["date"])
+                raw_df = raw_df.set_index("datetime").sort_index()
+
+            # Initialize health counters for all strategies
             for strat in self.strategies:
                 if strat.name not in self.strategy_health:
                     self.strategy_health[strat.name] = {"evaluated": 0, "voted": 0, "skipped": 0, "errors": 0}
-                self.strategy_health[strat.name]["evaluated"] += 1
-                try:
+
+            n_samples = min(sample_bars, max(1, len(raw_df) - 100))
+            step = max(1, n_samples // 30)
+            for offset in range(len(raw_df) - n_samples, len(raw_df), step):
+                slice_df = raw_df.iloc[max(0, offset - 100):offset + 1].copy()
+                regime_info = self.regime_engine.classify(slice_df)
+                for strat in self.strategies:
+                    self.strategy_health[strat.name]["evaluated"] += 1
                     try:
-                        sig = strat.generate_signal(slice_df, regime_details=regime_info)
-                    except TypeError:
-                        sig = strat.generate_signal(slice_df)
-                    if sig and sig.is_valid and sig.direction != Direction.NONE:
-                        self.strategy_health[strat.name]["voted"] += 1
-                except Exception as e:
-                    self.strategy_health[strat.name]["errors"] += 1
+                        try:
+                            sig = strat.generate_signal(slice_df, regime_details=regime_info)
+                        except TypeError:
+                            sig = strat.generate_signal(slice_df)
+                        if sig and sig.is_valid and sig.direction != Direction.NONE:
+                            self.strategy_health[strat.name]["voted"] += 1
+                    except Exception:
+                        self.strategy_health[strat.name]["errors"] += 1
+
             self._save_strategy_health()
-            logger.info(f"Telemetry primed: {len(self.strategies)} strategies evaluated. Health saved to {self.strategy_health_file}")
+            voted_count = sum(1 for v in self.strategy_health.values() if v.get("voted", 0) > 0)
+            logger.info(f"Telemetry primed: {len(self.strategies)} strategies evaluated, {voted_count} voting. Health saved to {self.strategy_health_file}")
         except Exception as e:
             logger.warning(f"Failed to prime strategy telemetry: {e}")
 
@@ -247,6 +288,12 @@ class LiveCommodityPaperRunner:
         curr_close = float(last_bar["close"])
         session_now = MCXSession.from_time(last_time.time())
 
+        # Daily boundary rollover: reset strategy counters when new date starts
+        candle_date = last_time.strftime("%Y-%m-%d")
+        if getattr(self, "current_trade_date", "") != candle_date:
+            self.current_trade_date = candle_date
+            self.reset_daily_health(status="ACTIVE")
+
         # 1. Update Open Position if any
         if self.open_position:
             pos = self.open_position
@@ -288,6 +335,7 @@ class LiveCommodityPaperRunner:
                 exit_triggered = True
                 exit_price = curr_close
                 exit_reason = "EOD_SQUAREOFF"
+                self._save_strategy_health(status="EOD_CLOSED")
 
             if exit_triggered:
                 self._close_position(exit_price, exit_reason, last_time)
@@ -350,7 +398,7 @@ class LiveCommodityPaperRunner:
                 best_sig = max(candidate_sigs, key=lambda s: s.confidence)
                 max_conf = best_sig.confidence
 
-                # ML Gatekeeper: extract features and evaluate confidence >= min_ml_conf (0.28)
+                # ML Gatekeeper: extract features and evaluate confidence >= min_ml_conf (0.32)
                 ml_prob = 0.50
                 if len(slice_df) >= 30 and self.ml_loaded:
                     try:
@@ -407,7 +455,7 @@ class LiveCommodityPaperRunner:
         bar_time: datetime,
         ml_conf: float = 0.50,
     ) -> None:
-        strike_step = getattr(self.config, "strike_step", 500) or 500
+        strike_step = getattr(self.config, "strike_step", 1000) or 1000
         atm_strike = int(round(price / strike_step) * strike_step)
         is_call = direction == "BUY"
         opt_type = "CE" if is_call else "PE"
@@ -631,17 +679,22 @@ def main() -> None:
     parser.add_argument("--security-id", type=str, default="562058", help="Dhan Security ID")
     parser.add_argument("--timeframe", type=str, default="5m", help="Candle timeframe (default: 5m)")
     parser.add_argument("--capital", type=float, default=200_000.0, help="Paper trading capital (default: 200,000)")
-    parser.add_argument("--max-cap-pct", type=float, default=15.0, help="Max capital percentage per trade (default: 15.0%%)")
+    parser.add_argument("--max-cap-pct", type=float, default=20.0, help="Max capital percentage per trade (default: 20.0%%)")
     parser.add_argument("--min-votes", type=int, default=5, help="Minimum strategy votes for entry (default: 5)")
-    parser.add_argument("--min-ml-conf", type=float, default=0.28, help="Minimum ML model confidence gate (default: 0.28)")
-    parser.add_argument("--session", type=str, default="EVENING", choices=["EVENING", "ALL", "AFTERNOON"], help="Allowed trading session")
+    parser.add_argument("--min-ml-conf", type=float, default=0.32, help="Minimum ML model confidence gate (default: 0.32)")
+    parser.add_argument("--session", type=str, default="ALL", choices=["ALL", "MORNING", "AFTERNOON", "EVENING"], help="Allowed trading session (default: ALL — full day trading across Morning, Afternoon, Evening)")
     parser.add_argument("--simulate-replay", type=str, default=None, help="Historical CSV path to replay as simulated live feed")
     parser.add_argument("--dry-run", action="store_true", help="Execute initialization and broker check without entering loop")
     args = parser.parse_args()
 
-    allowed_sessions = [MCXSession.EVENING] if args.session == "EVENING" else (
-        [MCXSession.MORNING, MCXSession.AFTERNOON, MCXSession.EVENING] if args.session == "ALL" else [MCXSession.AFTERNOON, MCXSession.EVENING]
-    )
+    if args.session == "EVENING":
+        allowed_sessions = [MCXSession.EVENING]
+    elif args.session == "MORNING":
+        allowed_sessions = [MCXSession.MORNING]
+    elif args.session == "AFTERNOON":
+        allowed_sessions = [MCXSession.AFTERNOON]
+    else:
+        allowed_sessions = [MCXSession.MORNING, MCXSession.AFTERNOON, MCXSession.EVENING]
 
     runner = LiveCommodityPaperRunner(
         symbol=args.symbol,

@@ -94,8 +94,20 @@ class ExecutionAgent:
         else:
             logger.error(f"[{self.NAME}] Unknown TRADING_MODE: {mode}")
 
+    def _resolve_lot_size(self, plan: dict) -> int:
+        if plan.get("lot_size"):
+            return int(plan["lot_size"])
+        sig = plan.get("signal") or {}
+        sym = str(plan.get("symbol") or (sig.get("symbol") if isinstance(sig, dict) else "") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+        try:
+            from utils.instrument_selector import get_instrument
+            return int(get_instrument(sym).lot_size)
+        except Exception:
+            return 5  # Default SILVERM lot size
+
     async def _dry_run(self, plan: dict) -> None:
         ts = datetime.now(IST).strftime("%H%M%S")
+        lot_size = self._resolve_lot_size(plan)
         # Allow scale-in and contract upgrade orders to reach PositionManager
         is_scale_in = False
         if len(self.order_manager._open_positions) == 1:
@@ -116,23 +128,29 @@ class ExecutionAgent:
         paper_fill = await self.paper_fills.simulate_entry(
             plan.get("option_symbol", ""),
             expected_premium=float(plan.get("est_premium", 0) or 0),
-            lot_size=int(plan.get("lot_size", NIFTY_LOT_SIZE) or NIFTY_LOT_SIZE),
+            lot_size=lot_size,
         )
         entry_premium = paper_fill.fill_price
         logger.info(f"[{self.NAME}] [OBSERVE] DRY_RUN | {plan.get('option_symbol')} @ ~{entry_premium}")
+        sig_data = plan.get("signal") if isinstance(plan.get("signal"), dict) else {}
+        spot_price = float(sig_data.get("spot") or sig_data.get("price") or sig_data.get("ltp") or sig_data.get("nifty_ltp") or plan.get("nifty_price") or 0.0)
         await self.bus.publish(Topic.ORDER_DRY_RUN, {
             **plan,
-            "mode":          "OBSERVE",
-            "order_id":      f"DRY_{ts}",
-            "entry_premium": entry_premium,
-            "nifty_price": ((plan.get("signal") or {}).get("nifty_ltp") or plan.get("nifty_price") or 0),
-            "paper_fill":    paper_fill.__dict__,
-            "simulated":     True,
-            "timestamp":     datetime.now(IST).isoformat(),
+            "mode":             "OBSERVE",
+            "order_id":         f"DRY_{ts}",
+            "entry_premium":    entry_premium,
+            "lot_size":         lot_size,
+            "spot_price":       spot_price,
+            "underlying_price": spot_price,
+            "nifty_price":      spot_price,
+            "paper_fill":       paper_fill.__dict__,
+            "simulated":        True,
+            "timestamp":        datetime.now(IST).isoformat(),
         }, self.NAME)
         self.order_manager.record_position_opened(plan.get("option_symbol", ""), {
             "order_id": f"DRY_{ts}",
-            "quantity": int(plan.get("quantity", plan.get("lot_size", NIFTY_LOT_SIZE)) or NIFTY_LOT_SIZE),
+            "quantity": int(plan.get("quantity", lot_size) or lot_size),
+            "lot_size": lot_size,
             "entry_premium": entry_premium,
             "simulated": True,
         })
@@ -180,8 +198,8 @@ class ExecutionAgent:
 
     async def _execute(self, plan: dict) -> None:
         sym      = plan.get("option_symbol", "")
-        quantity = int(plan.get("quantity", plan.get("lot_size", NIFTY_LOT_SIZE)) or NIFTY_LOT_SIZE)
-        lot_size = int(plan.get("lot_size", NIFTY_LOT_SIZE) or NIFTY_LOT_SIZE)
+        lot_size = self._resolve_lot_size(plan)
+        quantity = int(plan.get("quantity", lot_size) or lot_size)
         lots = max(1, quantity // max(lot_size, 1))
         allowed, guard_reason = self.order_manager.can_open_position()
         if not allowed:
@@ -196,7 +214,7 @@ class ExecutionAgent:
             if margin.lots_affordable > 0 and margin.lots_affordable < lots:
                 lots = margin.lots_affordable
                 quantity = lots * lot_size
-                plan = {**plan, "desired_lots": lots, "quantity": quantity}
+                plan = {**plan, "desired_lots": lots, "quantity": quantity, "lot_size": lot_size}
                 logger.warning(
                     f"[{self.NAME}] Margin reduced size | {sym} | "
                     f"allowed={lots} lot(s) | available=₹{margin.available_inr:,.0f}"
@@ -230,14 +248,19 @@ class ExecutionAgent:
                 f"[{self.NAME}] [OK] ORDER PLACED | {sym} | id={result.order_id} | "
                 f"protection={protection_mode}"
             )
+            sig_data = plan.get("signal") if isinstance(plan.get("signal"), dict) else {}
+            spot_price = float(sig_data.get("spot") or sig_data.get("price") or sig_data.get("ltp") or sig_data.get("nifty_ltp") or plan.get("nifty_price") or 0.0)
             await self.bus.publish(Topic.ORDER_PLACED, {
                 **plan,
-                "mode":          "AUTO",
-                "order_id":      result.order_id,
-                "entry_premium": entry_premium,
-                "nifty_price": ((plan.get("signal") or {}).get("nifty_ltp") or plan.get("nifty_price") or 0),
-                "simulated":     False,
-                "broker":        self.broker.broker_name,
+                "mode":             "AUTO",
+                "order_id":         result.order_id,
+                "entry_premium":    entry_premium,
+                "lot_size":         lot_size,
+                "spot_price":       spot_price,
+                "underlying_price": spot_price,
+                "nifty_price":      spot_price,
+                "simulated":        False,
+                "broker":           self.broker.broker_name,
                 "execution_accounts": getattr(self, "_last_account_order_results", []),
                 "execution_status": result.status,
                 "protection_mode": protection_mode,
@@ -325,7 +348,7 @@ class ExecutionAgent:
 
     def _apply_capital_gate(self, plan: dict):
         premium = float(plan.get("est_premium", plan.get("entry_premium", 0)) or 0)
-        lot_size = int(plan.get("lot_size", NIFTY_LOT_SIZE) or NIFTY_LOT_SIZE)
+        lot_size = self._resolve_lot_size(plan)
         quantity = int(plan.get("quantity", lot_size) or lot_size)
         requested_lots = int(plan.get("desired_lots") or max(1, quantity // max(lot_size, 1)) or 1)
         requested_lots = self._cap_lots_by_policy(
@@ -337,6 +360,7 @@ class ExecutionAgent:
         capital_status = self.capital_manager.get_status()
 
         gated = dict(plan)
+        gated["lot_size"] = lot_size
         gated["desired_lots"] = lots_to_use
         gated["quantity"] = lots_to_use * lot_size
         gated["total_invested"] = round(premium * gated["quantity"], 2)
@@ -359,7 +383,7 @@ class ExecutionAgent:
     def _cap_lots_by_policy(lots: int, *, premium: float, lot_size: int) -> int:
         max_lots = max(1, min(int(MAX_POSITION_LOTS), 3))
         premium = max(float(premium or 0.0), 0.0)
-        lot_size = max(int(lot_size or NIFTY_LOT_SIZE), 1)
+        lot_size = max(int(lot_size or 5), 1)
         lots = max(1, min(int(lots or 1), max_lots))
         cap_pct = 10.0
         if lots > 1:
@@ -370,7 +394,7 @@ class ExecutionAgent:
 
     def _record_capital_opened(self, plan: dict, entry_premium: float) -> None:
         premium = float(entry_premium or plan.get("est_premium", 0) or 0)
-        lot_size = int(plan.get("lot_size", NIFTY_LOT_SIZE) or NIFTY_LOT_SIZE)
+        lot_size = self._resolve_lot_size(plan)
         lots = int(plan.get("desired_lots") or max(1, int(plan.get("quantity", lot_size) or lot_size) // max(lot_size, 1)))
         trade_id = str(plan.get("option_symbol") or plan.get("order_id") or datetime.now(IST).isoformat())
         self.capital_manager.record_trade_opened(
@@ -486,9 +510,11 @@ class ExecutionAgent:
     async def _narrate(self, plan: dict, dry: bool) -> None:
         action = "observing (dry-run, no real order)" if dry else "placing order now"
         sig    = plan.get("signal", {})
+        sym    = str(plan.get("symbol") or sig.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+        price  = sig.get("spot") or sig.get("price") or sig.get("ltp") or sig.get("nifty_ltp") or 0
         prompt = (
-            f"Narrate this NIFTY options {action} in 2 sentences.\n"
-            f"Option: {plan.get('option_symbol')} | NIFTY: {sig.get('nifty_ltp')}\n"
+            f"Narrate this {sym} trade {action} in 2 sentences.\n"
+            f"Contract: {plan.get('option_symbol')} | {sym} Price: {price}\n"
             f"Entry ~{plan.get('est_premium')} | SL {plan.get('sl_premium')} | Target {plan.get('target_premium')}\n"
             f"Confidence: {plan.get('ml_confidence', 0):.0%}"
         )

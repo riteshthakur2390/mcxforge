@@ -60,9 +60,9 @@ from backtesting.realistic_assumptions import apply_realistic_entry
 from utils.pipeline_logging import log_pipeline_stage
 from utils.advanced_filters import get_expiry_theta
 
-BACKTEST_MAX_TRADE_INVESTMENT_INR = float(os.getenv("BACKTEST_MAX_TRADE_INVESTMENT_INR", "30000"))
+BACKTEST_MAX_TRADE_INVESTMENT_INR = float(os.getenv("BACKTEST_MAX_TRADE_INVESTMENT_INR", "40000"))
 MAX_TRADE_INVESTMENT_INR = BACKTEST_MAX_TRADE_INVESTMENT_INR
-STRONG_TRADE_INVESTMENT_INR = float(os.getenv("BACKTEST_STRONG_TRADE_INVESTMENT_INR", "30000"))
+STRONG_TRADE_INVESTMENT_INR = float(os.getenv("BACKTEST_STRONG_TRADE_INVESTMENT_INR", "40000"))
 BASE_TRADE_INVESTMENT_INR = float(os.getenv("BACKTEST_BASE_TRADE_INVESTMENT_INR", "25000"))
 REDUCED_BUDGET_MAX_TRADE_INR = float(os.getenv("REDUCED_BUDGET_MAX_TRADE_INR", "15000"))
 REDUCED_BUDGET_MIN_VOTES = int(os.getenv("REDUCED_BUDGET_MIN_VOTES", "4"))
@@ -79,9 +79,8 @@ CAUTION_TARGET_MAX_ML_CONF = float(os.getenv("CAUTION_TARGET_MAX_ML_CONF", "0.45
 LOW_VOTE_MIN_VOTES = int(os.getenv("LOW_VOTE_MIN_VOTES", "5"))
 LOW_VOTE_MIN_RANK = float(os.getenv("LOW_VOTE_MIN_RANK", "0.75"))
 LOW_VOTE_MIN_PROB = float(os.getenv("LOW_VOTE_MIN_PROB", "0.50"))
-LATE_SESSION_TARGET_PCT = float(os.getenv("LATE_SESSION_TARGET_PCT", "25"))
 LATE_SESSION_TARGET_START_MINUTE = int(
-    os.getenv("LATE_SESSION_TARGET_START_MINUTE", str(14 * 60 + 45))
+    os.getenv("LATE_SESSION_TARGET_START_MINUTE", str(22 * 60 + 30))
 )
 
 
@@ -301,12 +300,16 @@ class TradePlannerAgent:
         wyckoff_conf = float(wyckoff.get("confidence", 0.0) or 0.0)
         weighted_vote = context.get("weighted_vote", {}) or {}
         winning_side = weighted_vote.get("call" if direction == "BUY_CALL" else "put", {}) or {}
-        weighted_score = float(winning_side.get("weighted_score", 0.0) or 0.0)
-        expiry_session = is_expiry_day(signal_ts.date(), "NIFTY") or ("HeroZero" in strategies)
-        late_entry_cutoff = (15 * 60 + 5) if expiry_session else (15 * 60)
+        instrument_symbol = str(data.get("symbol") or os.getenv("INSTRUMENT", "SILVERM")).upper()
+        is_mcx = instrument_symbol in SUPPORTED_INDEX_SYMBOLS or any(k in instrument_symbol for k in ("SILVER", "GOLD", "CRUDE", "NAT"))
+        expiry_session = is_expiry_day(signal_ts.date(), symbol=instrument_symbol) or ("HeroZero" in strategies)
+        if is_mcx:
+            late_entry_cutoff = (23 * 60) if expiry_session else (22 * 60 + 30)
+        else:
+            late_entry_cutoff = (15 * 60 + 5) if expiry_session else (15 * 60)
         if signal_minute >= late_entry_cutoff:
             return (
-                f"blocked late-day entry after {late_entry_cutoff // 60}:{late_entry_cutoff % 60:02d} PM "
+                f"blocked late-day entry after {late_entry_cutoff // 60}:{late_entry_cutoff % 60:02d} "
                 f"(signal_minute={signal_minute})"
             )
         wyckoff_opposes_direction = (
@@ -688,15 +691,21 @@ class TradePlannerAgent:
             and success_prob >= PLANNER_SUCCESS_PROB_THRESH_0_3
         )
 
-        expiry_session = is_expiry_day(signal_ts.date(), "NIFTY") or ("HeroZero" in strategies)
-        late_entry_cutoff = (15 * 60 + 5) if expiry_session else (15 * 60)
+        instrument_symbol = str(data.get("symbol") or os.getenv("INSTRUMENT", "SILVERM")).upper()
+        is_mcx = instrument_symbol in SUPPORTED_INDEX_SYMBOLS or any(k in instrument_symbol for k in ("SILVER", "GOLD", "CRUDE", "NAT"))
+        expiry_session = is_expiry_day(signal_ts.date(), symbol=instrument_symbol) or ("HeroZero" in strategies)
+        if is_mcx:
+            late_entry_cutoff = (23 * 60) if expiry_session else (22 * 60 + 30)
+        else:
+            late_entry_cutoff = (15 * 60 + 5) if expiry_session else (15 * 60)
         if signal_minute >= late_entry_cutoff:
             return (
-                f"blocked late-day entry after {late_entry_cutoff // 60}:{late_entry_cutoff % 60:02d} PM "
+                f"blocked late-day entry after {late_entry_cutoff // 60}:{late_entry_cutoff % 60:02d} "
                 f"(signal_minute={signal_minute})"
             )
+        late_supertrend_cutoff = (21 * 60 + 15) if is_mcx else (13 * 60 + 15)
         if (
-            signal_minute >= (13 * 60 + 15)
+            signal_minute >= late_supertrend_cutoff
             and votes <= 2
             and strategies == {"SuperTrend+RSI", "ADX+PSAR"}
             and rank_score < PLANNER_RANK_SCORE_THRESH_0_6
@@ -1040,10 +1049,11 @@ class TradePlannerAgent:
                 f"(rank={rank_score:.2f}, setup={setup_strength:.2f}, "
                 f"bias={bias}, strategies={'+'.join(sorted(strategies))})"
             )
+        put_cont_cutoff = (21 * 60) if is_mcx else (13 * 60)
         if (
             setup_type == "vote_aligned"
             and direction == "BUY_PUT"
-            and signal_minute >= 13 * 60
+            and signal_minute >= put_cont_cutoff
             and {"SuperTrend+RSI", "FVG", "Ichimoku", "OIAnalysis"}.issubset(strategies)
             and not {"ADX+PSAR", "ORB", "SkewHunter"}.intersection(strategies)
             and (rank_score < PLANNER_RANK_SCORE_THRESH_0_6 or setup_strength < PLANNER_SETUP_STRENGTH_THRESH_0_86)
@@ -1056,7 +1066,7 @@ class TradePlannerAgent:
         if (
             setup_type == "vote_aligned"
             and direction == "BUY_CALL"
-            and signal_minute < 13 * 60
+            and signal_minute < (17 * 60 if is_mcx else 13 * 60)
             and {"UTBot", "OIAnalysis", "FVG", "VWAP+EMA", "Ichimoku"}.issubset(strategies)
             and "ORB" not in strategies
             and (rank_score < PLANNER_RANK_SCORE_THRESH_0_65 or setup_strength < PLANNER_SETUP_STRENGTH_THRESH_0_88)
@@ -1079,10 +1089,11 @@ class TradePlannerAgent:
                 f"(rank={rank_score:.2f}, setup={setup_strength:.2f}, "
                 f"bias={bias}, strategies={'+'.join(sorted(strategies))})"
             )
-        if signal_minute >= (13 * 60 + 15) and rank_score < PLANNER_RANK_SCORE_THRESH_0_5:
+        late_rank_cutoff = (21 * 60 + 15) if is_mcx else (13 * 60 + 15)
+        if signal_minute >= late_rank_cutoff and rank_score < PLANNER_RANK_SCORE_THRESH_0_5:
             return (
                 f"late setup needs stronger rank: {rank_score:.2f} < 0.58 "
-                f"after 13:15"
+                f"after {late_rank_cutoff // 60}:{late_rank_cutoff % 60:02d}"
             )
         if (
             setup_type == "breakout"
@@ -1233,10 +1244,11 @@ class TradePlannerAgent:
                 f"(rank={rank_score:.2f}, setup={setup_strength:.2f}, "
                 f"bias={bias}, strategies={'+'.join(sorted(strategies))})"
             )
+        late_squeeze_cutoff = (22 * 60) if is_mcx else (14 * 60)
         if (
             direction == "BUY_PUT"
             and setup_type == "vote_aligned"
-            and signal_minute >= (14 * 60)
+            and signal_minute >= late_squeeze_cutoff
             and {"IVContraction", "BBSqueeze"}.intersection(strategies)
             and not {"ADX+PSAR", "VolumeProfile", "OIAnalysis"}.intersection(strategies)
         ):
@@ -1292,8 +1304,20 @@ class TradePlannerAgent:
                 f"{'/'.join(sorted(allowed_moneyness))}"
             )
         if not self.backtest_mode and premium_source != "LIVE":
+            current_mode = str(os.getenv("TRADING_MODE", TRADING_MODE)).strip().upper()
+            if current_mode == "OBSERVE" or premium_source in ("ESTIMATED_OBSERVE", "ESTIMATED"):
+                return True, ""
             return False, "no_live_option_quote"
         return True, ""
+
+    @staticmethod
+    def _extract_votes_count(votes_obj) -> int:
+        if isinstance(votes_obj, dict):
+            return sum(1 for v in votes_obj.values() if v)
+        try:
+            return int(votes_obj or 0)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _should_block_late_session_setup(
@@ -1376,15 +1400,17 @@ class TradePlannerAgent:
             data       = msg.payload
             signal_ts  = self._resolve_signal_ts(data.get("timestamp"))
             metadata = data.get("metadata", {}) or {}
-            instrument_override = data.get("instrument", None)
+            instrument_override = data.get("instrument", None) or data.get("symbol", None)
             if not instrument_override:
                 for meta in metadata.values():
-                    if isinstance(meta, dict) and str(meta.get("instrument", "")).upper() in SUPPORTED_INDEX_SYMBOLS:
-                        instrument_override = str(meta.get("instrument")).upper()
-                        break
-            # ── Instrument selection (NIFTY vs SENSEX) ───────────────────────────
-            # Auto-selects based on day: Thursday → SENSEX, Friday → SENSEX, else NIFTY
-            # Signal can override with instrument="SENSEX" in payload
+                    if isinstance(meta, dict):
+                        m_cand = str(meta.get("instrument") or meta.get("symbol") or "").upper()
+                        if m_cand in SUPPORTED_INDEX_SYMBOLS:
+                            instrument_override = m_cand
+                            break
+            if not instrument_override:
+                instrument_override = os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))
+            # ── Instrument selection (Commodity Futures / Options) ───────────────────
             instrument: InstrumentConfig = get_instrument(
                 override=instrument_override,
                 trade_date=signal_ts.date(),
@@ -1420,7 +1446,7 @@ class TradePlannerAgent:
                     reason=reason,
                     market_ts=signal_ts.isoformat(),
                     direction=str(data.get("direction", "NONE")),
-                    votes=int(data.get("votes", 0) or 0),
+                    votes=self._extract_votes_count(data.get("votes", 0)),
                 )
                 logger.warning(
                     f"[{self.NAME}] Skipping unapproved signal | "
@@ -1485,7 +1511,7 @@ class TradePlannerAgent:
                 )
                 return
             reduced_budget_requested, reduced_budget_cap, reduced_budget_reason, reduced_budget_min_ml_prob = self._reduced_budget_requested(data)
-            votes = int(data.get("votes", 0) or 0)
+            votes = self._extract_votes_count(data.get("votes", 0))
             early_trigger = bool(
                 (((data.get("metadata") or {}).get("_context") or {}).get("early_trigger", False))
             )
@@ -1578,8 +1604,10 @@ class TradePlannerAgent:
                     f"< {PLANNER_MIN_STRATEGY_CONFIDENCE:.2f}"
                 )
                 return
+            is_mcx = symbol in SUPPORTED_INDEX_SYMBOLS or any(k in str(symbol).upper() for k in ("SILVER", "GOLD", "CRUDE", "NAT"))
+            late_rank_cutoff = (21 * 60 + 15) if is_mcx else (13 * 60 + 15)
             if (
-                signal_minute >= (13 * 60 + 15)
+                signal_minute >= late_rank_cutoff
                 and strategy_confidence < 0.55
                 and rank_score < PLANNER_RANK_SCORE_THRESH_0_55
                 and votes <= 3
@@ -1818,8 +1846,10 @@ class TradePlannerAgent:
                         f"market_ts={signal_ts.isoformat()} | {details}"
                     )
                     return
+            is_mcx = symbol in SUPPORTED_INDEX_SYMBOLS or any(k in str(symbol).upper() for k in ("SILVER", "GOLD", "CRUDE", "NAT"))
+            late_cond_cutoff = (22 * 60 + 30) if is_mcx else (15 * 60)
             if rank_score < PLANNER_RANK_SCORE_THRESH_0_48 and not reduced_budget_requested:
-                if success_prob < PLANNER_SUCCESS_PROB_THRESH_0_4 or signal_minute >= 15 * 60:
+                if success_prob < PLANNER_SUCCESS_PROB_THRESH_0_4 or signal_minute >= late_cond_cutoff:
                     await self._publish_planner_rejection(
                         data,
                         reason="conditional_rank_guard",
@@ -1982,15 +2012,40 @@ class TradePlannerAgent:
             validation_confidence = max(confidence, float(data.get("confidence", 0.0) or 0.0))
             valid_candidates: list[dict] = []
             for candidate in candidates:
+                cand_sym = str(candidate["symbol"])
+                cand_source = str(candidate.get("premium_source", ""))
+                if not self.backtest_mode and cand_source != "LIVE":
+                    refreshed_ltp = 0.0
+                    if self.broker:
+                        try:
+                            refreshed_ltp = float(self.broker.get_option_ltp(cand_sym) or 0.0)
+                        except Exception:
+                            refreshed_ltp = 0.0
+                    if refreshed_ltp <= 0 and self.data_agent:
+                        try:
+                            refreshed_ltp = float(self.data_agent.get_option_ltp(cand_sym) or 0.0)
+                        except Exception:
+                            refreshed_ltp = 0.0
+                    if refreshed_ltp > 0:
+                        candidate["premium"] = refreshed_ltp
+                        candidate["premium_source"] = "LIVE"
+                        cand_source = "LIVE"
+                        if isinstance(candidate.get("snapshot"), dict):
+                            candidate["snapshot"]["last_price"] = refreshed_ltp
+                            candidate["snapshot"]["source"] = "DHAN_LIVE"
+                        logger.info(
+                            f"[{self.NAME}] Successfully recovered live quote for candidate | "
+                            f"symbol={cand_sym} | ltp={refreshed_ltp}"
+                        )
                 candidate_valid, candidate_reason = self._validate_selected_contract(
                     symbol=symbol,
-                    option_symbol=str(candidate["symbol"]),
+                    option_symbol=cand_sym,
                     expiry_date=expiry_date,
                     strike=int(candidate["strike"]),
                     option_type=opt_t,
                     underlying_ltp=nifty_ltp,
                     confidence=validation_confidence,
-                    premium_source=str(candidate["premium_source"]),
+                    premium_source=cand_source,
                     direction=direction,
                     strike_step=strike_step,
                 )
@@ -2021,7 +2076,8 @@ class TradePlannerAgent:
                 return
 
             best = valid_candidates[0]
-            min_contract_score = 0.40 if reduced_budget_requested else 0.54
+            is_comm = "SILVER" in str(symbol).upper() or "GOLD" in str(symbol).upper() or "CRUDE" in str(symbol).upper()
+            min_contract_score = 0.30 if is_comm else (0.40 if (reduced_budget_requested or votes >= 6 or rank_score >= 0.65) else 0.54)
             if float(best["score"]) < min_contract_score:
                 log_pipeline_stage(
                     self.NAME,
@@ -2092,7 +2148,7 @@ class TradePlannerAgent:
                         else:
                             logger.info(f"[{self.NAME}] Delta sizing rejected contract | {delta_size.note}")
                             return
-                    elif not (int(best.get("desired_lots", 1) or 1) >= 2 or int(data.get("votes", 0) or 0) >= 5 or rank_score >= 0.65):
+                    elif not (int(best.get("desired_lots", 1) or 1) >= 2 or self._extract_votes_count(data.get("votes", 0)) >= 5 or rank_score >= 0.65):
                         best["desired_lots"] = min(int(best["desired_lots"]), int(delta_size.lots))
                 wyckoff_size = float(
                     (((data.get("metadata") or {}).get("_context") or {}).get("wyckoff_size_multiplier", 1.0))
@@ -2484,7 +2540,7 @@ class TradePlannerAgent:
                 symbol           = symbol,
                 direction        = Direction(direction),
                 confidence       = float(data.get("confidence", 0.65)),
-                votes            = int(data.get("votes", 2)),
+                votes            = self._extract_votes_count(data.get("votes", 2)),
                 strategies_fired = data.get("strategies_fired", []),
                 nifty_ltp        = nifty_ltp,
                 timestamp        = signal_ts,
@@ -2686,8 +2742,8 @@ class TradePlannerAgent:
         setup = ((plan.signal.metadata or {}).get("_context") or {}).get("setup", {}) or {}
         structure = ((plan.signal.metadata or {}).get("_context") or {}).get("market_structure", {}) or {}
         prompt = (
-            f"Review this NIFTY options trade plan in one sentence. Flag any concern.\n"
-            f"Option: {plan.option_symbol} | NIFTY: {plan.signal.nifty_ltp}\n"
+            f"Review this {plan.option_symbol} commodity options trade plan in one sentence. Flag any concern.\n"
+            f"Option: {plan.option_symbol} | Underlying: {plan.signal.nifty_ltp}\n"
             f"Premium: {plan.est_premium} | DTE: {plan.days_to_expiry} | RR: {plan.risk_reward}\n"
             f"ML conf: {plan.ml_confidence:.0%} | Strategies: {plan.signal.strategies_fired}\n"
             f"Setup: {setup.get('setup_type', 'unknown')} ({float(setup.get('setup_strength', 0.0) or 0.0):.2f}) | "
@@ -2757,7 +2813,7 @@ class TradePlannerAgent:
         for snap in snapshots:
             raw_premium = float(snap.last_price or 0.0)
             if raw_premium <= 0:
-                raw_premium = estimate_atm_premium(nifty_ltp, dte) * max(0.55, 1 - abs(snap.strike - atm) / 400)
+                raw_premium = estimate_atm_premium(nifty_ltp, dte, symbol=symbol) * max(0.55, 1 - abs(snap.strike - atm) / max(strike_step * 4, 400))
                 snap.source = snap.source or "ESTIMATED"
             raw_premium = round(raw_premium, 1)
 
@@ -2820,14 +2876,16 @@ class TradePlannerAgent:
                 vix_regime=str(market_context.get("vix_regime", "FLAT")),
                 lot_size=lot_size,
             )
+            is_commodity_trade = any(k in str(symbol).upper() for k in ("SILVER", "GOLD", "CRUDE", "NAT", "MCX"))
+            allow_one_lot_fallback = (
+                (self.backtest_mode or is_commodity_trade or str(os.getenv("TRADING_MODE", TRADING_MODE)).upper() == "OBSERVE")
+                and decision.reason == "risk budget too small for one lot"
+                and decision.expectancy_inr > 0
+            )
             if not decision.tradeable:
-                if (
-                    self.backtest_mode
-                    and decision.reason == "risk budget too small for one lot"
-                    and decision.expectancy_inr > 0
-                ):
+                if allow_one_lot_fallback:
                     notes.append(
-                        f"Backtest sizing fallback {snap.strike}{option_type}: "
+                        f"1-lot sizing fallback {snap.strike}{option_type}: "
                         f"EV {decision.expectancy_inr:.0f}/trade positive but one-lot risk "
                         f"{decision.avg_loss_inr:.0f} exceeds budget {decision.risk_budget_inr:.0f}"
                     )
@@ -2854,7 +2912,7 @@ class TradePlannerAgent:
                 stop_premium=decision.stop_premium,
                 lot_size=lot_size,
             )
-            if self.backtest_mode and decision.reason == "risk budget too small for one lot":
+            if allow_one_lot_fallback:
                 desired_lots = 1
                 quantity = lot_size
             else:
@@ -2993,17 +3051,36 @@ class TradePlannerAgent:
                 },
             })
         viable = [c for c in scored if c["planned_stop_risk_per_lot"] <= c["risk_budget_inr"]]
-        if not viable and self.backtest_mode and scored:
-            fallback_candidate = max(scored, key=lambda c: c["score"])
-            _, fallback_reason = self._should_allow_backtest_fallback(
-                candidate=fallback_candidate,
-                setup=setup,
-                ml_rank_score=ml_rank_score,
-            )
-            details = fallback_reason or (
-                "risk budget fallback disabled; one-lot stop risk must fit budget"
-            )
-            notes.append(f"Skipped fallback candidate: {details}")
+        if not viable and scored:
+            # Commodity & positive-expectancy 1-lot parity allocation:
+            # When trading commodities or in OBSERVE mode, 1 lot is the minimum atomic trade unit.
+            # If candidate contracts have positive expectancy and total_invested fits the commodity
+            # capital allocation (<= ₹40,000 per trade, matching the 30-day institutional backtest),
+            # allow 1 lot rather than dropping the setup.
+            commodity_cap = float(os.getenv("MAX_COMMODITY_TRADE_CAPITAL", "40000.0"))
+            best_ev_cand = max(scored, key=lambda c: c.get("score", 0.0))
+            if (
+                best_ev_cand.get("expectancy_inr", 0.0) > 0
+                and best_ev_cand.get("total_invested", 0.0) <= commodity_cap
+            ):
+                best_ev_cand["desired_lots"] = 1
+                best_ev_cand["quantity"] = best_ev_cand["lot_size"]
+                best_ev_cand["risk_budget_inr"] = max(best_ev_cand["risk_budget_inr"], best_ev_cand["planned_stop_risk_per_lot"])
+                viable = [best_ev_cand]
+                notes.append(
+                    f"Commodity 1-lot parity allocation active: 1 lot (invested≈₹{best_ev_cand['total_invested']:.0f} <= ₹{commodity_cap:.0f}, EV≈₹{best_ev_cand['expectancy_inr']:.0f})"
+                )
+            elif self.backtest_mode:
+                fallback_candidate = max(scored, key=lambda c: c["score"])
+                _, fallback_reason = self._should_allow_backtest_fallback(
+                    candidate=fallback_candidate,
+                    setup=setup,
+                    ml_rank_score=ml_rank_score,
+                )
+                details = fallback_reason or (
+                    "risk budget fallback disabled; one-lot stop risk must fit budget"
+                )
+                notes.append(f"Skipped fallback candidate: {details}")
         if not viable:
             notes.append(
                 f"No contract fits hard planned-stop risk budget of {risk_budget_inr:.0f} per trade."
@@ -3099,6 +3176,22 @@ class TradePlannerAgent:
         snapshots = []
         for strike in strikes:
             contract = by_strike.get(strike)
+            if contract is not None and (contract.last_price is None or contract.last_price <= 0):
+                recovered_ltp = 0.0
+                if self.broker:
+                    try:
+                        recovered_ltp = float(self.broker.get_option_ltp(contract.symbol) or 0.0)
+                    except Exception:
+                        recovered_ltp = 0.0
+                if recovered_ltp <= 0 and self.data_agent:
+                    try:
+                        recovered_ltp = float(self.data_agent.get_option_ltp(contract.symbol) or 0.0)
+                    except Exception:
+                        recovered_ltp = 0.0
+                if recovered_ltp > 0:
+                    contract.last_price = recovered_ltp
+                    contract.source = "DHAN_LIVE" if "DHAN" in str(contract.source) else "BROKER_LTP"
+
             if contract is None:
                 option_symbol = build_option_symbol(symbol, expiry_date, strike, option_type)
                 validation = validate_option_contract(
@@ -3159,17 +3252,28 @@ class TradePlannerAgent:
         risk_budget_inr: float,
         risk_per_lot: float,
     ) -> tuple[float, str]:
+        sym = getattr(snap, "symbol", "") or ""
+        is_commodity = "SILVER" in sym.upper() or "GOLD" in sym.upper() or "CRUDE" in sym.upper() or premium > 500
+        step = 1000 if "SILVER" in sym.upper() else (100 if "GOLD" in sym.upper() else NIFTY_STRIKE_STEP)
         strike_distance = abs(snap.strike - atm)
-        distance_penalty = min(0.45, strike_distance / max(NIFTY_STRIKE_STEP * 6, 1) * 0.35)
-        premium_bonus = 0.18 if OPTION_MIN_PREMIUM <= premium <= OPTION_MAX_PREMIUM else -0.12
-        # Historical/live availability should not dominate strike selection. A
-        # large source bonus made backtests jump to a different strike only
-        # because that strike had archived option candles.
+        distance_penalty = min(0.45, strike_distance / max(step * 4, 1) * 0.35)
+
+        if is_commodity:
+            min_prem = 1000.0 if "SILVER" in sym.upper() else 50.0
+            max_prem = 9000.0 if "SILVER" in sym.upper() else 1000.0
+            premium_bonus = 0.18 if min_prem <= premium <= max_prem else -0.12
+            iv_penalty = 0.0
+            if snap.implied_volatility > 0.38:
+                iv_penalty = min(0.12, (snap.implied_volatility - 0.38) * 0.5)
+            oi_bonus = min(0.15, snap.open_interest / 1_000) if snap.open_interest > 0 else 0.0
+        else:
+            premium_bonus = 0.18 if OPTION_MIN_PREMIUM <= premium <= OPTION_MAX_PREMIUM else -0.12
+            iv_penalty = 0.0
+            if snap.implied_volatility > 0.28:
+                iv_penalty = min(0.12, (snap.implied_volatility - 0.28) * 0.5)
+            oi_bonus = min(0.15, snap.open_interest / 1_000_000) if snap.open_interest > 0 else 0.0
+
         live_bonus = 0.02 if snap.last_price > 0 else 0.0
-        oi_bonus = min(0.15, snap.open_interest / 1_000_000) if snap.open_interest > 0 else 0.0
-        iv_penalty = 0.0
-        if snap.implied_volatility > 0.28:
-            iv_penalty = min(0.12, (snap.implied_volatility - 0.28) * 0.5)
         theta_penalty = min(0.12, max(0.0, snap.theta) / 20)
         delta_bonus = 0.0
         if snap.delta:
@@ -3180,7 +3284,7 @@ class TradePlannerAgent:
             confidence + premium_bonus + live_bonus + oi_bonus + delta_bonus
             - distance_penalty - iv_penalty - theta_penalty
         )
-        if risk_per_lot > risk_budget_inr > 0:
+        if not is_commodity and risk_per_lot > risk_budget_inr > 0:
             score -= min(0.22, (risk_per_lot / risk_budget_inr - 1.0) * 0.18)
         note = (
             f"premium={premium}, distance={strike_distance}, "
@@ -3839,7 +3943,7 @@ class TradePlannerAgent:
         lot = max(int(lot_size or NIFTY_LOT_SIZE), 1)
         lots = max(1, min(int(desired_lots or 1), max_lots))
         is_bt = (os.getenv("TRADING_MODE") == "BACKTEST") or (cap_pct_override is not None and cap_pct_override >= 30.0)
-        max_trade_value = float(BACKTEST_MAX_TRADE_INVESTMENT_INR if is_bt else (DEPLOYED_CAPITAL or 30000.0))
+        max_trade_value = float(BACKTEST_MAX_TRADE_INVESTMENT_INR if is_bt else (DEPLOYED_CAPITAL or 40000.0))
         absolute_cap = max(
             premium * lot,
             min(

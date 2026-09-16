@@ -57,7 +57,7 @@ def main() -> None:
             total_deleted += deleted
 
     print()
-    print("SignalForge local history backfill")
+    print("MCXForge local history backfill")
     print(f"SQLite: {DATA_HIST_DB_PATH}")
     print(f"Cache dir: {DATA_CACHE_DIR}")
     print(f"Active broker for windows: {active_broker}")

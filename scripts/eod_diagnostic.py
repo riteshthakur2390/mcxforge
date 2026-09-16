@@ -2,11 +2,11 @@
 """
 scripts/eod_diagnostic.py — End-of-Day Strategy Diagnostic Report
 ==================================================================
-Run at end of every trading day (or schedule via cron at 15:45 IST).
+Run at end of every trading day (or schedule via cron at 23:35 IST post MCX close).
 
     python scripts/eod_diagnostic.py
     python scripts/eod_diagnostic.py --date 2026-04-14
-    python scripts/eod_diagnostic.py --log logs/signalforge_20260414.log
+    python scripts/eod_diagnostic.py --log logs/mcxforge_20260414.log
 
 WHAT IT ANSWERS:
   1. Which registered strategies fired today? Which were completely silent?
@@ -24,7 +24,7 @@ OUTPUT:
   - journal/eod_YYYY-MM-DD.json   — machine-readable for trend tracking
 
 USAGE (cron):
-  45 15 * * 1-5 cd /Users/vishranti/Downloads/projects/signalforge && /usr/bin/python3 scripts/eod_diagnostic.py --no-color >> logs/eod_cron.log 2>&1
+  35 23 * * 1-5 cd /Users/vishranti/Downloads/projects/mcxforge && ./venv/bin/python scripts/eod_diagnostic.py --no-color >> logs/eod_cron.log 2>&1
 """
 
 from __future__ import annotations
@@ -120,7 +120,7 @@ def strip_ansi(s: str) -> str:
 
 class LogParser:
     """
-    Parses a SignalForge log file and extracts all diagnostic events.
+    Parses an MCXForge log file and extracts all diagnostic events.
     Handles both live and backtest logs.
     """
 
@@ -342,7 +342,7 @@ class EODReport:
 
     def _header(self) -> None:
         now = datetime.now(IST).strftime("%H:%M IST")
-        self._box(f"SignalForge — EOD Diagnostic Report  |  {self.date}  |  Generated {now}")
+        self._box(f"MCXForge — EOD Diagnostic Report  |  {self.date}  |  Generated {now}")
         self._line()
 
     def _market_conditions(self) -> None:
@@ -845,6 +845,8 @@ def find_log_for_date(target_date: str, log_dir: Path) -> Path | None:
     """Auto-locate log file for a given date."""
     date_compact = target_date.replace("-", "")
     candidates = [
+        log_dir / f"mcxforge_{target_date}.log",
+        log_dir / f"mcxforge_{date_compact}.log",
         log_dir / f"signalforge_{target_date}.log",
         log_dir / f"signalforge_{date_compact}.log",
         log_dir / f"backtest_{target_date}.log",
@@ -896,7 +898,7 @@ def main() -> None:
         if log_path is None:
             # Fall back: most recently modified .log file
             logs = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-            log_path = logs[0] if logs else log_dir / "signalforge.log"
+            log_path = logs[0] if logs else log_dir / "mcxforge.log"
 
     print(f"\nAnalysing: {log_path}")
     print(f"Date:      {target_date}\n")
@@ -924,6 +926,14 @@ def main() -> None:
     with open(json_path, "w") as f:
         json.dump(json_data, f, indent=2)
     print(f"📊 JSON saved:   {json_path}")
+
+    # ── Automatically accumulate today's completed session for all 4 commodities into local CSV & SQLite
+    try:
+        from scripts.sync_commodity_historical_data import sync_all_commodities_historical
+        print("\n📥 Incrementally accumulating latest completed candles for all 4 commodities (SILVERM, GOLDM, CRUDEOIL, NATGAS)...")
+        sync_all_commodities_historical(allow_market_hours=True)
+    except Exception as e:
+        print(f"⚠️ EOD multi-commodity candle sync warning: {e}")
 
 
 if __name__ == "__main__":

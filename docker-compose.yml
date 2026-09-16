@@ -20,8 +20,10 @@ services:
       - ./data:/app/data
       - ./journal:/app/journal
       - ./logs:/app/logs
+      - ./ml:/app/ml
       - ./ml/saved_models:/app/ml/saved_models
       - ./backtesting/results:/app/backtesting/results
+      - ./state:/app/state
       # ── Live code mount (code changes take effect on restart)
       - ./agents_code:/app/agents_code
       - ./core:/app/core
@@ -31,6 +33,9 @@ services:
       - ./broker:/app/broker
       - ./scripts:/app/scripts
       - ./backtesting:/app/backtesting
+      - ./instruments:/app/instruments
+      - ./tests:/app/tests
+      - ./analysis:/app/analysis
       - ./main.py:/app/main.py
       # ── Credentials
       - ./.env:/app/.env
@@ -45,20 +50,26 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - TRADING_MODE=${TRADING_MODE:-OBSERVE}
       - BROKER=${BROKER:-dhan}
-      - INSTRUMENT=${INSTRUMENT:-SILVERMIC}
-      - COMMODITY=${COMMODITY:-SILVERMIC}
+      - INSTRUMENT=${INSTRUMENT:-SILVERM}
+      - COMMODITY=${COMMODITY:-SILVERM}
       - TELEGRAM_TARGET=LIVE
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - DASHBOARD_PORT=5054
+      - MALLOC_ARENA_MAX=2
+      - OMP_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - VECLIB_MAXIMUM_THREADS=1
+      - NUMEXPR_NUM_THREADS=1
 
     restart: unless-stopped
 
     deploy:
       resources:
         limits:
-          memory: 3G
+          memory: 1400M
         reservations:
-          memory: 512M
+          memory: 500M
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5054/"]
@@ -70,5 +81,5 @@ services:
     logging:
       driver: "json-file"
       options:
-        max-size: "50m"
-        max-file: "5"
+        max-size: "20m"
+        max-file: "3"

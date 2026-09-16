@@ -44,9 +44,13 @@ def get_all_commodity_trading_dates(data_file: str | None = None, timeframe: str
     if data_file:
         csv_path = Path(data_file)
     elif "d" in timeframe.lower():
-        csv_path = REPO_ROOT / "data" / "historical" / "SILVERMIC_dhan_1d.csv"
+        csv_path = REPO_ROOT / "data" / "historical" / "SILVERM_dhan_1d.csv"
+        if not csv_path.exists():
+            csv_path = REPO_ROOT / "data" / "historical" / "SILVERMIC_dhan_1d.csv"
     else:
-        csv_path = REPO_ROOT / "data" / "historical" / "SILVERMIC_dhan_5m.csv"
+        csv_path = REPO_ROOT / "data" / "historical" / "SILVERM_dhan_5m.csv"
+        if not csv_path.exists():
+            csv_path = REPO_ROOT / "data" / "historical" / "SILVERMIC_dhan_5m.csv"
 
     if not csv_path.exists():
         raise FileNotFoundError(f"Missing historical data at {csv_path}")
@@ -170,10 +174,10 @@ def main():
     parser.add_argument("--min-votes", type=int, default=5, help="Minimum vote consensus threshold (default: 5)")
     parser.add_argument("--session", type=str, default="EVENING", choices=["EVENING", "ALL", "MORNING"], help="Session filter (default: EVENING)")
     parser.add_argument("--capital", type=float, default=200_000.0, help="Starting capital (default: 200,000)")
-    parser.add_argument("--max-cap-pct", type=float, default=15.0, help="Max capital percentage usable per trade (default: 15.0%%)")
+    parser.add_argument("--max-cap-pct", type=float, default=20.0, help="Max capital percentage usable per trade (default: 20.0%%)")
     parser.add_argument("--telegram", action="store_true", help="Send master performance report card to Telegram")
     parser.add_argument("--telegram-trades", action="store_true", help="Send individual trade notifications to Telegram")
-    parser.add_argument("--min-ml-conf", type=float, default=0.28, help="Filter out trades below ML confidence threshold (default: 0.28)")
+    parser.add_argument("--min-ml-conf", type=float, default=float(os.getenv("MIN_ML_CONF", "0.32")), help="Filter out trades below ML confidence threshold (default: 0.32)")
     parser.add_argument("--output-dir", type=str, default="analysis/backtest_parallel_5y", help="Output directory")
     args = parser.parse_args()
 
@@ -405,7 +409,7 @@ def main():
                     "target": tr.get("entry_price", 0.0) * 1.025,
                     "quantity": tr.get("quantity", 5),
                     "lots": tr.get("lots", 1),
-                    "margin_used": tr.get("margin_used_inr", 30000.0),
+                    "margin_used": tr.get("margin_used_inr", 40000.0),
                     "max_margin_budget": args.capital * (args.max_cap_pct / 100.0),
                     "strategy": tr.get("lead_strategy", ""),
                     "strategies": tr.get("strategies_fired", "").split("+") if isinstance(tr.get("strategies_fired"), str) else [],
@@ -437,7 +441,7 @@ def main():
                     "gross_pnl_inr": tr.get("gross_pnl_inr", 0.0),
                     "charges": tr.get("fees_inr", 0.0),
                     "net_pnl_inr": tr.get("net_pnl_inr", 0.0),
-                    "margin_used": tr.get("margin_used_inr", 30000.0),
+                    "margin_used": tr.get("margin_used_inr", 40000.0),
                     "max_margin_budget": args.capital * (args.max_cap_pct / 100.0),
                     "lots": tr.get("lots", 1),
                     "quantity": tr.get("quantity", 5),

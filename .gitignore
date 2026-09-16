@@ -67,9 +67,16 @@ llm_costs.csv
 journal/
 
 # Large Datasets & Market Cache
-data/
+data/cache/
+data/historical/
+data/oi_history/
+data/*.db
+data/*.parquet
+data/examples/
+!data/*.py
+!data/__init__.py
 pandas_ta/
-
+data/
 # Heavy Backtest Results & Ledger Archives
 backtesting/results/
 analysis/

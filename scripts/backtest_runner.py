@@ -85,7 +85,7 @@ def _build_progress_callback(run_id: str):
         if progress + 1e-9 < state["next_pct"]:
             return
         _send_backtest_telegram(
-            "SignalForge Backtest PROGRESS\n"
+            "MCXForge Backtest PROGRESS\n"
             f"Run: {run_id}\n"
             f"Progress: {progress:.1f}%\n"
             f"Processing: {payload.get('day')} ({payload.get('current')}/{payload.get('total')})"
@@ -119,7 +119,7 @@ def _summarize_closed_trades(journal_entries: list[dict]) -> dict[str, float]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SignalForge backtest runner")
+    parser = argparse.ArgumentParser(description="MCXForge backtest runner")
     parser.add_argument("--date", type=str, default=None, help="Single trading date YYYY-MM-DD")
     parser.add_argument("--start-date", type=str, default=None, help="Start date YYYY-MM-DD")
     parser.add_argument("--end-date", type=str, default=None, help="End date YYYY-MM-DD")
@@ -167,7 +167,7 @@ def main() -> None:
     if not args.json:
         print(f"Starting replay | run_id={run_id}", flush=True)
         _send_backtest_telegram(
-            "SignalForge Backtest STARTED\n"
+            "MCXForge Backtest STARTED\n"
             f"Run: {run_id}\n"
             f"Trading days: {requested_trading_days or 'auto'}\n"
             f"Mode: {'live-parity' if args.live_parity else 'historical-research'}\n"
@@ -187,7 +187,7 @@ def main() -> None:
     except Exception as exc:
         if not args.json:
             _send_backtest_telegram(
-                "SignalForge Backtest FAILED\n"
+                "MCXForge Backtest FAILED\n"
                 f"Run: {run_id}\n"
                 f"Error: {type(exc).__name__}: {exc}"
             )
@@ -249,7 +249,7 @@ def main() -> None:
     from config.settings import MAX_POSITION_LOTS
     
     print("\n" + "="*40)
-    print("SignalForge Rich Performance Report")
+    print("MCXForge Rich Performance Report")
     print("="*40)
     print(format_rich_report(
         journal, 
@@ -263,7 +263,7 @@ def main() -> None:
     print(f"CSV: {result.get('csv_export_path', 'n/a')}\n")
     trade_summary = _summarize_closed_trades(journal)
     _send_backtest_telegram(
-        "SignalForge Backtest COMPLETED\n"
+        "MCXForge Backtest COMPLETED\n"
         f"Run: {run_id}\n"
         f"Net P&L: Rs. {trade_summary['net_pnl']:,.0f}\n"
         f"Trades: {trade_summary['trades']} | Win rate: {trade_summary['win_rate']:.1f}%\n"

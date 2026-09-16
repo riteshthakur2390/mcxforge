@@ -41,7 +41,7 @@ def main():
     df = df[df.index >= cutoff]
 
     print(f"\n{'━'*60}")
-    print(f"  SignalForge — Regime Debug")
+    print(f"  MCXForge — Regime Debug")
     print(f"  Candles: {len(df)} | Days: {args.days}")
     print(f"  Thresholds: ADX trend>{ADX_TREND_THRESHOLD} | choppy<{ADX_CHOP_THRESHOLD} | chop>{CHOP_INDEX_THRESHOLD}")
     print(f"{'━'*60}\n")

@@ -9,7 +9,12 @@ from instruments.base import (
     ContractSpec,
     CommoditySector,
 )
-from instruments.silvermic import SILVERMIC_CONFIG, SILVERM_CONFIG, get_active_silvermic_contract
+from instruments.silverm import (
+    SILVERM_CONFIG,
+    SILVERMIC_CONFIG,
+    get_active_silverm_contract,
+    get_active_silvermic_contract,
+)
 from instruments.gold import GOLDM_CONFIG, GOLD_CONFIG
 from instruments.crudeoil import CRUDEOILM_CONFIG, CRUDEOIL_CONFIG
 from instruments.naturalgas import NATGASM_CONFIG, NATURALGAS_CONFIG

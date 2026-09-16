@@ -215,9 +215,9 @@ def evaluate_for_reduced_budget(
         Estimated option entry premium in Rs. per unit.  When supplied, used
         to enforce the premium cap derived from empirical option candle audit.
     """
-    # ── Strict ML Gate: Enforce ML Confidence >= 0.28 (Zero exception) ──────
-    if success_prob < 0.28:
-        return False, f"rb_low_ml_prob: success_prob={success_prob:.4f} < 0.28 (Strict ML Gate)"
+    # ── Strict ML Gate: Enforce ML Confidence >= 0.32 (Zero exception) ──────
+    if success_prob < 0.32:
+        return False, f"rb_low_ml_prob: success_prob={success_prob:.4f} < 0.32 (Strict ML Gate)"
 
     # ── Smart Filter 1: Block expensive options (empirical: >Rs.140 → 22% WR) ──
     if entry_premium is not None and entry_premium >= RB_MAX_PREMIUM_INR:
@@ -350,11 +350,11 @@ def evaluate_for_reduced_budget(
             f"min={effective_min_rank:.2f}"
         )
 
-    # ── Gate 5: minimum model confidence (strict >= 0.28) ────────────────
-    prob_floor = 0.28
+    # ── Gate 5: minimum model confidence (strict >= 0.32) ────────────────
+    prob_floor = 0.32
     if votes < 4:
         # setup_strength qualified: require closer to threshold
-        prob_floor = max(0.28, required_conf - RB_NEAR_ML_DELTA)
+        prob_floor = max(0.32, required_conf - RB_NEAR_ML_DELTA)
 
     if success_prob < prob_floor:
         return False, (

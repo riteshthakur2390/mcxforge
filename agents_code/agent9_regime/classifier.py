@@ -230,7 +230,8 @@ class MarketRegimeAgent:
             last_date = df.index[-1]
             d = last_date.date() if hasattr(last_date, 'date') else last_date
             from utils.option_utils import is_expiry_day
-            return is_expiry_day(d, "NIFTY")
+            sym = os.getenv("INSTRUMENT", "SILVERM")
+            return is_expiry_day(d, sym)
         except Exception:
             return False
 
@@ -270,7 +271,8 @@ class MarketRegimeAgent:
         if getattr(detailed, "label", "") == "RANGING":
             return f"detailed={detailed.sub_label} | chop={details.get('chop_index', 0):.1f}"
         if regime == Regime.HIGH_VOL:
-            return f"India VIX={details.get('vix', 0):.1f}"
+            vix = details.get("vix", 0)
+            return f"VIX={vix:.1f}" if vix > 0 else f"High Volatility (ATR={details.get('atr', 0):.1f})"
         if regime == Regime.CHOPPY:
             return f"ADX={details.get('adx', 0):.1f} | Chop={details.get('chop_index', 0):.1f}"
         return f"ADX={details.get('adx', 0):.1f}"

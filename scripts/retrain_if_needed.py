@@ -86,7 +86,7 @@ def closed_trades_since(ts: datetime | None) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Retrain SignalForge ML model if stale")
+    parser = argparse.ArgumentParser(description="Retrain MCXForge ML model if stale")
     parser.add_argument("--min-trades", type=int, default=200)
     parser.add_argument("--lookback", type=int, default=60)
     parser.add_argument("--max-age-days", type=int, default=ML_RETRAIN_DAYS)
@@ -101,7 +101,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    model_path = Path(ML_MODELS_DIR) / f"nifty_{LIVE_TIMEFRAME}.pkl"
+    active_sym = os.getenv("INSTRUMENT", "SILVERM").lower()
+    model_path = Path(ML_MODELS_DIR) / f"{active_sym}_{LIVE_TIMEFRAME}.pkl"
+    if not model_path.exists():
+        fallback_model = Path(ML_MODELS_DIR) / f"silvermic_{LIVE_TIMEFRAME}.pkl"
+        if fallback_model.exists():
+            model_path = fallback_model
     age_days = model_age_days(model_path) if model_path.exists() else None
     trained_at = model_trained_at(model_path) if model_path.exists() else None
     new_closed = closed_trades_since(trained_at)

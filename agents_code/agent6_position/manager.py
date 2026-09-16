@@ -454,13 +454,13 @@ class PositionManagerAgent:
         nifty_ltp = float(msg.payload.get("ltp", 0))
         option_sym = self._pos.plan.option_symbol
 
-        use_data_ltp = bool(self.data_agent) and (
-            not self._pos.is_simulated
-            or self._pos.execution_mode == "BACKTEST"
-        )
+        use_data_ltp = bool(self.data_agent)
         current_ltp = 0.0
         if use_data_ltp:
-            current_ltp = float(self.data_agent.get_option_ltp(option_sym) or 0.0)
+            try:
+                current_ltp = float(self.data_agent.get_option_ltp(option_sym) or 0.0)
+            except Exception:
+                current_ltp = 0.0
         is_futures = (
             getattr(self._pos.plan, "option_type", "") == "FUT"
             or getattr(self._pos.plan, "premium_source", "") == "COMMODITY_FUTURES"
@@ -1270,14 +1270,14 @@ class PositionManagerAgent:
             ltp = apply_option_slippage(ltp, "SELL", BACKTEST_OPTION_SLIPPAGE_PCT)
             costs = estimate_round_trip_costs(closing_pos.entry_premium, ltp, closing_quantity, BACKTEST_BROKERAGE_PER_ORDER, BACKTEST_TRANSACTION_COST_PCT)
         else: costs = 0.0
-        is_short = bool(closing_pos.plan and closing_pos.plan.signal and closing_pos.plan.signal.direction and closing_pos.plan.signal.direction.is_short)
+        is_short = bool(closing_pos.is_short)
         tick_val = getattr(closing_pos.plan, "tick_value", 1.0) or 1.0
         pnl_pts = (closing_pos.entry_premium - ltp) if is_short else (ltp - closing_pos.entry_premium)
         remaining_realized = pnl_pts * closing_quantity * tick_val
         realized_pnl = round(closing_partial_pnl + remaining_realized - costs, 2)
         total_qty = max(closing_initial_qty, closing_quantity + closing_partial_qty_closed, 1)
         pnl = (pnl_pts / max(closing_pos.entry_premium, 1.0)) * 100
-        if reason == "SL_HIT" and pnl > 0:
+        if reason == "SL_HIT" and pnl > 0 and getattr(self, "_tsl_active", False):
             reason = "PROFIT_PROTECT"
         trade_id = closing_pos.plan.option_symbol
         ltp = self._paper_exit_premium(trade_id, ltp, ts)
@@ -1406,7 +1406,7 @@ class PositionManagerAgent:
         if d.get("structure_bias") and not metadata.get("structure_bias"):
             metadata["structure_bias"] = d.get("structure_bias")
         signal = RawSignal(
-            symbol="NIFTY",
+            symbol=str(s.get("symbol") or d.get("symbol") or os.getenv("INSTRUMENT", "SILVERM")),
             direction=Direction(s.get("direction", "NONE")),
             confidence=float(s.get("confidence", 0)),
             votes=int(s.get("votes", 0)),
@@ -1466,7 +1466,7 @@ class PositionManagerAgent:
         self._pos = None
         self._quantity = 0
         ts = datetime.now(IST)
-        is_short = bool(closing_pos.plan and closing_pos.plan.signal and closing_pos.plan.signal.direction and closing_pos.plan.signal.direction.is_short)
+        is_short = bool(closing_pos.is_short)
         tick_val = getattr(closing_pos.plan, "tick_value", 1.0) or 1.0
         pnl_pts = (closing_pos.entry_premium - current_ltp) if is_short else (current_ltp - closing_pos.entry_premium)
         realized_pnl = round(pnl_pts * closing_quantity * tick_val, 2)

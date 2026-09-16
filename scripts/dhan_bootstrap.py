@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resumable Dhan-only historical data bootstrap for SignalForge."""
+"""Resumable Dhan-only historical data bootstrap for MCXForge."""
 
 from __future__ import annotations
 

@@ -247,7 +247,7 @@ def _dynamic_threshold(
             if 9 * 60 + 30 <= mins < 10 * 60:  # opening chop window
                 threshold += ML_MORNING_CHOP_PENALTY
                 tags.append("morning_chop_penalty")
-            elif 14 * 60 + 15 <= mins < 15 * 60:  # late session
+            elif 22 * 60 + 30 <= mins < 23 * 60 + 15:  # MCX late session
                 threshold += ML_LATE_SESSION_PENALTY
                 tags.append("late_session_penalty")
         except Exception:
@@ -928,9 +928,11 @@ class MLFilterAgent:
             ts = None
 
         early_trigger = bool(context.get("early_trigger", False))
-        # Use one decision path only. The older pre-check below was publishing
-        # APPROVED before the real gate finished, which inflated ML-approved
-        # counts and let the same signal be approved and rejected in one pass.
+        # Sub-threshold consensus (< 4 votes) is noise — drop immediately without publishing rejections
+        if votes < 4:
+            logger.debug(f"[{self.NAME}] Dropping sub-threshold signal (votes {votes} < 4)")
+            return
+
         if votes < MIN_STRATEGY_VOTES and not self._allows_low_consensus_signal(data):
             reason = f"ML gate: votes {votes} < required {MIN_STRATEGY_VOTES}"
             enriched = {
@@ -1000,8 +1002,8 @@ class MLFilterAgent:
 
         # High-consensus exception: if 7+ strategies agree and rank is strong (>= 0.58),
         # allow institutional breakout expansions (aligning with benchmark 2024-03-28 approval).
-        if votes >= 7 and rank_score >= 0.58 and required_conf > 0.28:
-            required_conf = 0.28
+        if votes >= 7 and rank_score >= 0.58 and required_conf > 0.32:
+            required_conf = 0.32
 
         if decision_type == "ML" and success_prob < required_conf:
             reason = f"ML gate: model confidence {success_prob:.3f} < minimum required {required_conf:.2f} for {setup_type}"
@@ -2294,7 +2296,7 @@ class MLFilterAgent:
 
         if raw_conf < ML_FILTER_RAW_CONF_THRESH_0_74:
             return False
-        if ml_conf < ML_FILTER_ML_CONF_THRESH_0_28:
+        if ml_conf < ML_FILTER_ML_CONF_THRESH_0_32:
             return False
 
         strategies = {
@@ -2435,7 +2437,7 @@ class MLFilterAgent:
             or setup_type not in {"vote_aligned", "trend_pullback"}
             or setup_strength < ML_FILTER_SETUP_STRENGTH_THRESH_0_58
             or rank_score < ML_FILTER_RANK_SCORE_THRESH_0_36
-            or ml_conf < ML_FILTER_ML_CONF_THRESH_0_28
+            or ml_conf < ML_FILTER_ML_CONF_THRESH_0_32
             or raw_conf < ML_FILTER_RAW_CONF_THRESH_0_83
             or threshold - rank_score > ML_FILTER_RANK_SCORE_THRESH_0_13
         ):
@@ -2629,10 +2631,11 @@ class MLFilterAgent:
                 logger.debug(f"[{self.NAME}] File watcher error: {e}")
 
     async def _explain(self, data: dict, ml_conf: float, rank_score: float) -> None:
+        sym = str(data.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
         setup = (((data.get("metadata") or {}).get("_context") or {}).get("setup") or {})
         structure = (((data.get("metadata") or {}).get("_context") or {}).get("market_structure") or {})
         prompt = (
-            f"ML ranked a NIFTY {data.get('direction')} signal.\n"
+            f"ML ranked a {sym} {data.get('direction')} signal.\n"
             f"Strategies: {data.get('strategies_fired')}\n"
             f"Success probability: {ml_conf:.0%} | Rank score: {rank_score:.0%} | Votes: {data.get('votes')}\n"
             f"Setup: {setup.get('setup_type', 'unknown')} ({float(setup.get('setup_strength', 0.0) or 0.0):.2f})\n"
@@ -2668,9 +2671,10 @@ class MLFilterAgent:
             llm_status = get_llm()
             if llm_status.provider_name == "disabled":
                 return
+            sym = str(data.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
             prompt = (
                 f"ML {'model' if decision == 'ML' else 'fallback'} approved "
-                f"a NIFTY {data.get('direction')} signal.\n"
+                f"a {sym} {data.get('direction')} signal.\n"
                 f"Strategies: {data.get('strategies_fired')}\n"
                 f"Confidence: {ml_conf:.0%} | Votes: {data.get('votes')}\n"
                 f"In 2 sentences, why does this look like a good entry? Be direct."
@@ -2817,8 +2821,8 @@ class MLFilterAgent:
     @staticmethod
     def _session_bucket(ts: datetime) -> str:
         hhmm = ts.strftime("%H:%M")
-        if hhmm < "11:00":
+        if hhmm < "13:00":
             return "OPENING"
-        if hhmm < "13:30":
+        if hhmm < "17:00":
             return "MIDDAY"
         return "CLOSING"

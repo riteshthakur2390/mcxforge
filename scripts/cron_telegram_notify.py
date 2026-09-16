@@ -105,9 +105,9 @@ def main() -> int:
     duration = time.monotonic() - started
 
     ok = result.returncode == 0
-    status = "OK" if ok else "FAIL"
+    status = "SUCCESS" if ok else "FAILED"
     message = (
-        f"SignalForge Cron {status}\n"
+        f"MCXForge Cron {status}\n"
         f"Job: {args.name}\n"
         f"Started: {started_at.strftime('%Y-%m-%d %H:%M:%S IST')}\n"
         f"Duration: {_format_duration(duration)}\n"

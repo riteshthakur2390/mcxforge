@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Renew SwingForge Dhan access tokens before market open.
+Renew MCXForge Dhan access tokens before market open.
 
-This mirrors the SignalForge workflow but writes only to SwingForge's local
-.env by default.
+Validates and renews MCXForge's local .env tokens.
 """
 
 from __future__ import annotations
@@ -148,7 +147,6 @@ def _send_telegram(message: str) -> None:
 
 
 SIBLING_PROJECTS = [
-    Path("/Users/vishranti/Downloads/projects/signalforge"),
     Path("/Users/vishranti/Downloads/projects/thetaforge"),
     Path("/Users/vishranti/Downloads/projects/expiryforge"),
     Path("/Users/vishranti/Downloads/projects/swingforge"),
@@ -177,7 +175,7 @@ def _sync_to_sibling_projects(token_key: str, client_id_key: str, token_val: str
 def main() -> int:
     global ENV_PATH
 
-    parser = argparse.ArgumentParser(description="Renew SignalForge Dhan token(s)")
+    parser = argparse.ArgumentParser(description="Renew MCXForge Dhan token(s)")
     parser.add_argument("--env", default=str(ENV_PATH))
     parser.add_argument("--scan-limit", type=int, default=int(os.getenv("DHAN_PARALLEL_ACCOUNT_SCAN_LIMIT", "3") or "3"))
     parser.add_argument("--timeout", type=float, default=12.0)
@@ -201,7 +199,7 @@ def main() -> int:
     changed: list[str] = []
     verified: list[str] = []
 
-    print(f"SignalForge Dhan Token Renewal | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"MCXForge Dhan Token Renewal | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"env: {ENV_PATH}")
     print(f"accounts: {len(accounts)}\n")
 
@@ -257,7 +255,7 @@ def main() -> int:
     if args.telegram and (failures or args.telegram_always):
         status = "ALERT" if failures else "OK"
         lines = [
-            f"SwingForge Dhan Token Renewal {status}",
+            f"MCXForge Dhan Token Renewal {status}",
             f"accounts={len(accounts)} renewed={len(changed)} verified_only={len(verified)} failed={len(failures)}",
         ]
         if failures:

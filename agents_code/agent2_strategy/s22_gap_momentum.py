@@ -54,10 +54,10 @@ class GapMomentumStrategy:
     def _evaluate(self, df: pd.DataFrame, kwargs: dict) -> dict:
         none = {"direction": Direction.NONE, "confidence": 0.0, "name": self.name}
 
-        # Time gate: 09:30 - 10:30 only
+        # Time gate: 09:15 - 10:30 only (after first 15m candle formed at 09:00 open)
         ts = df.index[-1]
         try:
-            # Time gate: 09:15 - 10:30 IST (after first 15m candle formed at 09:00 open)
+            total_min = ts.hour * 60 + ts.minute
             if not (9*60+15 <= total_min <= 10*60+30):
                 return none
         except Exception:

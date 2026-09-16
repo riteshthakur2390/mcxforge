@@ -18,8 +18,24 @@ def test_phase5d_evidence_collection_execution(tmp_path):
     state_dir.mkdir(parents=True)
     journal_dir.mkdir(parents=True)
 
+    import csv
+    sig_file = journal_dir / "signals_2026-08-27.csv"
+    with open(sig_file, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["signal_id", "date", "time", "direction", "nifty_price", "votes", "regime"])
+        writer.writeheader()
+        for i in range(25):
+            writer.writerow({
+                "signal_id": f"SIG_20260827_{i:02d}",
+                "date": "2026-08-27",
+                "time": f"09:{30+i:02d}",
+                "direction": "BUY_CALL",
+                "nifty_price": "24500.0",
+                "votes": "6",
+                "regime": "TRENDING",
+            })
+
     summary = run_evidence_collection(
-        journal_dir="journal",
+        journal_dir=str(journal_dir),
         output_dir=str(analysis_dir),
         state_dir=str(state_dir),
         target_sample=25,

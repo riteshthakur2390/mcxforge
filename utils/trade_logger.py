@@ -67,7 +67,7 @@ def log_trade(payload: dict, is_backtest: bool = False, run_id: str = "", csv_pa
             "signal_id": payload.get("signal_id", ""),
             "run_id": run_id or payload.get("run_id", ""),
             "mode": payload.get("mode", payload.get("execution_mode", "UNKNOWN")),
-            "symbol": payload.get("symbol", "NIFTY"),
+            "symbol": payload.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM")),
             "option_symbol": payload.get("option_symbol", ""),
             "direction": payload.get("direction", ""),
             "strike": payload.get("strike", ""),

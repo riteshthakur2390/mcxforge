@@ -19,6 +19,7 @@ WIRING:
 """
 
 from __future__ import annotations
+import os
 from datetime import datetime
 import pytz
 
@@ -83,7 +84,8 @@ class MarketContextGate:
         payload["market_intelligence"] = report.to_dict()
         payload["trade_quality"] = report.trade_quality
         payload["trade_quality_band"] = report.quality_band
-        payload["signal_output"] = report.to_signal_output(payload.get("symbol", "NIFTY"))
+        curr_symbol = str(payload.get("symbol") or os.getenv("INSTRUMENT", "SILVERM"))
+        payload["signal_output"] = report.to_signal_output(curr_symbol)
 
         # ── Context Alignment Score (CAS) ─────────────────────────────────────
         try:
@@ -95,7 +97,7 @@ class MarketContextGate:
                 sig_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             except Exception:
                 sig_dt = datetime.now(IST)
-            is_exp = is_expiry_day(sig_dt.date(), symbol=str(payload.get("symbol", "NIFTY")))
+            is_exp = is_expiry_day(sig_dt.date(), symbol=curr_symbol)
             is_expiry_afternoon = is_exp and (sig_dt.hour >= 14 and sig_dt.minute >= 15)
 
             cas_res = ContextAlignmentScore.evaluate(

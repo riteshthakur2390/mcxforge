@@ -47,17 +47,25 @@ import pytz
 IST = pytz.timezone("Asia/Kolkata")
 
 try:
-    from config.settings import JOURNAL_DIR, NIFTY_STRIKE_STEP
+    from config.settings import JOURNAL_DIR
 except ImportError:
-    JOURNAL_DIR      = "journal"
-    NIFTY_STRIKE_STEP = 50
+    JOURNAL_DIR = "journal"
+
+def _get_default_step(symbol: str = "") -> int:
+    sym = symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))
+    try:
+        from utils.instrument_selector import get_instrument
+        return int(get_instrument(sym).strike_step)
+    except Exception:
+        return 500
 
 SNAPSHOT_DIR = Path(JOURNAL_DIR) / "option_chain"
 STRIKES_EACH_SIDE = 10  # ATM ± 10 strikes = 21 strikes total
 
 
-def _atm(spot: float, step: int = 50) -> int:
-    return int(round(spot / step) * step)
+def _atm(spot: float, step: int = 500) -> int:
+    s = max(int(step or 500), 1)
+    return int(round(spot / s) * s)
 
 
 def _proxy_iv(hv: float, moneyness_steps: int) -> float:
@@ -126,10 +134,11 @@ class OptionChainSnapshot:
         Build a synthetic option chain using Black-Scholes proxy.
         Used in backtest and when broker is unavailable.
         """
-        atm    = _atm(spot)
+        sym    = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+        step   = _get_default_step(sym)
+        atm    = _atm(spot, step=step)
         T      = max(dte, 0.5) / 365.0
         r      = 0.065
-        step   = NIFTY_STRIKE_STEP
         n      = STRIKES_EACH_SIDE
 
         strikes_range = range(atm - n * step, atm + n * step + 1, step)
@@ -186,8 +195,9 @@ class OptionChainSnapshot:
         day_dir  = SNAPSHOT_DIR / today
         day_dir.mkdir(exist_ok=True)
 
+        sym      = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
         suffix   = f"_{trade_id}" if trade_id else ""
-        fname    = f"{now_str}_NIFTY_{atm}{suffix}.json"
+        fname    = f"{now_str}_{sym}_{atm}{suffix}.json"
         fpath    = day_dir / fname
 
         with open(fpath, "w") as f:
@@ -220,14 +230,15 @@ class OptionChainSnapshot:
         days = (3 - d.weekday()) % 7 or 7
         expiry = d + timedelta(days=days)
 
-        atm   = _atm(spot)
-        step  = NIFTY_STRIKE_STEP
+        sym   = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+        step  = _get_default_step(sym)
+        atm   = _atm(spot, step=step)
         chain = {}
 
         for steps in range(-STRIKES_EACH_SIDE, STRIKES_EACH_SIDE + 1):
             k = atm + steps * step
-            ce_sym = build_option_symbol("NIFTY", expiry, k, "CE")
-            pe_sym = build_option_symbol("NIFTY", expiry, k, "PE")
+            ce_sym = build_option_symbol(sym, expiry, k, "CE")
+            pe_sym = build_option_symbol(sym, expiry, k, "PE")
 
             ltp_ce = self._broker.get_option_ltp(ce_sym) or 0.1
             ltp_pe = self._broker.get_option_ltp(pe_sym) or 0.1

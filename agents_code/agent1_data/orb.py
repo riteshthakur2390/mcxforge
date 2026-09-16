@@ -18,7 +18,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 def compute_orb(
     df: pd.DataFrame,
-    orb_start: str = "09:15",
+    orb_start: str = "09:00",
     orb_end:   str = "09:30",
 ) -> tuple[float | None, float | None]:
     """

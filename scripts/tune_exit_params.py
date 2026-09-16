@@ -76,7 +76,7 @@ def run_case(args, overrides: dict[str, str]) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sweep exit parameters for SignalForge")
+    parser = argparse.ArgumentParser(description="Sweep exit parameters for MCXForge")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--ignore-regime", action="store_true")

@@ -270,7 +270,7 @@
 <!-- ROW 4: STRATEGY HEALTH + SIGNALS TABLE -->
 <div style="display:flex;gap:0;margin:8px">
   <div class="card" style="flex:1;margin:0 4px 0 0">
-    <div class="card-title" id="strategy-status-title">Strategy Status (43 Strategies Active · Standby · Awaiting Candle Close)</div>
+    <div class="card-title" id="strategy-status-title">Strategy Status (37 Strategies Active · Standby · Awaiting Candle Close)</div>
     <div class="strat-grid" id="strat-grid"></div>
   </div>
   <div class="card" style="flex:2;margin:0 0 0 4px">
@@ -302,15 +302,13 @@ let equityData  = { labels: [], values: [] };
 const ALL_STRATEGIES = [
   "TrendFollowing", "OpeningRangeBreakout", "VWAPMeanReversion", "VolatilityBreakout",
   "DonchianBreakout", "BBMeanReversion", "MACrossover", "RSIDivergence",
-  "MomentumVolumeBreakout", "OrderFlowDelta", "TimeOfDaySeasonality",
+  "MomentumVolumeBreakout", "GoldSilverPairs", "OrderFlowDelta", "TimeOfDaySeasonality",
   "RSI2MeanReversion", "CalendarSeasonality", "TermStructure",
-  "SuperTrend+RSI", "VWAP+EMA", "ORB", "BBSqueeze", "ADX+PSAR",
-  "FVG", "UTBot", "CPR", "VolumeProfile", "LiqSweep",
+  "SuperTrend+RSI", "VWAP+EMA", "ADX+PSAR",
+  "FVG", "UTBot", "CPR", "Ichimoku", "VolumeProfile", "LiqSweep",
   "PriceAction", "OIAnalysis", "AMD", "GapDirection", "SMC",
-  "ValueArea", "GapMomentum", "ADXRising", "RangeSpread",
-  "StochRSI", "EMASlope", "HeikinAshi",
-  "VWAPExtreme", "OpeningRangeBias", "ElliottWave",
-  "StrikeMomentum", "GammaExposure", "IVContraction", "ExpiryWeek"
+  "GapMomentum", "ADXRising", "RangeSpread", "SqueezeMomentum",
+  "StochRSI", "EMASlope", "HeikinAshi", "ElliottWave"
 ];
 
 // ── Equity chart init ───────────────────────────────────────────────────────

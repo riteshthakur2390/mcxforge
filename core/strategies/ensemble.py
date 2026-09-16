@@ -27,6 +27,7 @@ Unifies all strategy families for MCX Commodity Futures (SILVERMIC, GOLD, CRUDEO
 
 from __future__ import annotations
 
+import os
 import importlib
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, time, timedelta
@@ -194,8 +195,25 @@ class SignalForgeStrategyAdapter(BaseCommodityStrategy):
         if len(df) < max(20, self.atr_period + 5):
             return none_sig
 
+        orb_high, orb_low = None, None
         try:
-            res = self.sf_strategy.evaluate(df)
+            if len(df) > 0 and isinstance(df.index[-1], (datetime, pd.Timestamp)):
+                today = df.index[-1].date()
+                day_mask = [idx.date() == today if isinstance(idx, (datetime, pd.Timestamp)) else False for idx in df.index]
+                day_df = df[day_mask]
+                if not day_df.empty:
+                    orb_candles = day_df.between_time("09:00", "09:30")
+                    if not orb_candles.empty:
+                        orb_high = float(orb_candles["high"].max())
+                        orb_low = float(orb_candles["low"].min())
+        except Exception:
+            pass
+
+        try:
+            try:
+                res = self.sf_strategy.evaluate(df, orb_high=orb_high, orb_low=orb_low)
+            except TypeError:
+                res = self.sf_strategy.evaluate(df)
         except Exception:
             return none_sig
 
@@ -284,8 +302,6 @@ class SignalForgeStrategyAdapter(BaseCommodityStrategy):
 SIGNALFORGE_STRATEGY_CATALOG = [
     ("SuperTrend+RSI", "agents_code.agent2_strategy.s1_supertrend_rsi", "SuperTrendRSI"),
     ("VWAP+EMA", "agents_code.agent2_strategy.s2_vwap_ema", "VWAPEMACross"),
-    ("ORB", "agents_code.agent2_strategy.s3_orb", "ORBStrategy"),
-    ("BBSqueeze", "agents_code.agent2_strategy.s4_bb_squeeze", "BBSqueeze"),
     ("ADX+PSAR", "agents_code.agent2_strategy.s5_adx_psar", "ADXParabolicSAR"),
     ("FVG", "agents_code.agent2_strategy.s6_fvg", "FVGStrategy"),
     ("UTBot", "agents_code.agent2_strategy.s7_utbot", "UTBotStrategy"),
@@ -298,7 +314,6 @@ SIGNALFORGE_STRATEGY_CATALOG = [
     ("AMD", "agents_code.agent2_strategy.s15_amd", "AMDStrategy"),
     ("GapDirection", "agents_code.agent2_strategy.s16_gap_direction", "GapDirectionStrategy"),
     ("SMC", "agents_code.agent2_strategy.s17_smc", "SMCStrategy"),
-    ("ValueArea", "agents_code.agent2_strategy.s20_volume_profile", "VolumeProfileStrategy"),
     ("GapMomentum", "agents_code.agent2_strategy.s22_gap_momentum", "GapMomentumStrategy"),
     ("ADXRising", "agents_code.agent2_strategy.s23_adx_rising", "ADXRisingStrategy"),
     ("RangeSpread", "agents_code.agent2_strategy.s24_range_spread", "RangeSpreadStrategy"),
@@ -306,14 +321,7 @@ SIGNALFORGE_STRATEGY_CATALOG = [
     ("StochRSI", "agents_code.agent2_strategy.s26_stoch_rsi", "StochRSIStrategy"),
     ("EMASlope", "agents_code.agent2_strategy.s27_ema_slope", "EMASlopeStrategy"),
     ("HeikinAshi", "agents_code.agent2_strategy.s28_heikin_ashi", "HeikinAshiStrategy"),
-    ("VWAPExtreme", "agents_code.agent2_strategy.s29_vwap_extreme", "VWAPExtremeStrategy"),
-    ("OpeningRangeBias", "agents_code.agent2_strategy.s31_opening_range_bias", "OpeningRangeBiasStrategy"),
-    # Excluded from offline backtest: ElliottWave (lagging) and StrikeMomentum (requires live websocket options chain; proxy causes counter-trend false entries)
-    # ("ElliottWave", "agents_code.agent2_strategy.s34_elliott_wave", "ElliottWaveStrategy"),
-    # ("StrikeMomentum", "agents_code.agent2_strategy.s21_strike_momentum", "StrikeMomentumStrategy"),
-    ("GammaExposure", "agents_code.agent2_strategy.s32_gamma_exposure", "GammaExposureStrategy"),
-    ("IVContraction", "agents_code.agent2_strategy.s14_iv_contraction", "IVContractionStrategy"),
-    ("ExpiryWeek", "agents_code.agent2_strategy.s19_expiry_week", "ExpiryWeekStrategy"),
+    ("ElliottWave", "agents_code.agent2_strategy.s34_elliott_wave", "ElliottWaveStrategy"),
 ]
 
 
@@ -357,7 +365,7 @@ def build_default_strategy_suite(catalog_only: bool = False) -> List[BaseCommodi
         TermStructureStrategy(),
     ]
 
-    # Add all 27 canonical adapted strategies from the catalog
+    # Add all canonical adapted strategies from the catalog
     for name, mod_path, cls_name in SIGNALFORGE_STRATEGY_CATALOG:
         try:
             mod = importlib.import_module(mod_path)
@@ -370,7 +378,7 @@ def build_default_strategy_suite(catalog_only: bool = False) -> List[BaseCommodi
 
 
 TOXIC_COMMODITY_STRATEGIES = {
-    # Lagging breakout and false-whipsaw models that erode capital in chop
+    # Lagging breakout and false-whipsaw models that erode capital in chop (opt-in pruning)
     "EMASlope", "DonchianBreakout", "ValueArea", "OpeningRangeBreakout",
     "UTBot", "StochRSI", "MomentumVolumeBreakout", "OIAnalysis", "FVG", "ADX+PSAR",
     "VolatilityBreakout", "SuperTrend+RSI", "BBMeanReversion", "RangeSpread", "Ichimoku",
@@ -378,13 +386,17 @@ TOXIC_COMMODITY_STRATEGIES = {
 }
 
 
-def build_quality_strategy_suite() -> List[BaseCommodityStrategy]:
+def build_quality_strategy_suite(prune_toxic: Optional[bool] = None) -> List[BaseCommodityStrategy]:
     """
-    Returns only verified alpha-generating strategies for MCX Commodity Futures,
-    pruning lagging breakout and false-whipsaw models that erode capital in chop.
+    Returns active strategies for MCX Commodity Futures.
+    Defaults to all active strategies unless PRUNE_TOXIC_STRATEGIES=true is explicitly set.
     """
     full_suite = build_default_strategy_suite()
-    return [s for s in full_suite if s.name not in TOXIC_COMMODITY_STRATEGIES]
+    if prune_toxic is None:
+        prune_toxic = os.getenv("PRUNE_TOXIC_STRATEGIES", "false").lower() in ("1", "true", "yes")
+    if prune_toxic:
+        return [s for s in full_suite if s.name not in TOXIC_COMMODITY_STRATEGIES]
+    return full_suite
 
 
 
@@ -595,52 +607,55 @@ class CommodityEnsembleEngine:
                 mae_pts = max(mae_pts, adv)
 
                 # ── SignalForge Multi-Tier Progressive Profit Protection Ladder ──
-                # As implemented in Position Manager (agent6) & ProfitLadder:
-                # When position moves X% into profit, lock stop loss into progressive profit tiers.
-                risk_pts = max(abs(pos_entry_price - pos_sl), 50.0)
-                fav_pct = (fav / max(pos_entry_price, 1e-4)) * 100.0
-                opt_gain_pct = fav_pct * 20.0  # Option leverage approx (Delta 0.50, Premium ~2.5% of spot)
+                # Ported from Position Manager (agent6) & SignalForge Risk Architecture:
+                # Progressive profit locking activates once the position has established (candles_held >= 1).
+                # Entry candle (candles_held == 0) is protected by the structural initial stop loss (pos_sl).
                 candles_held = i - pos_entry_idx
+                risk_pts = max(abs(pos_entry_price - pos_sl), 50.0)
+                mfe_pct = (mfe_pts / max(pos_entry_price, 1e-4)) * 100.0
+                opt_gain_pct = mfe_pct * 20.0  # Option leverage approx (Delta 0.50, Premium ~2.5% of spot)
 
-                # Allow position to breathe during initial entry swings (decision candles >= 2)
-                if candles_held >= 2:
-                    # Tier 1: Breakeven Lock (Option +18% / Spot +0.70% / 1.20R move) -> Lock Breakeven (+0.15R buffer)
-                    if fav >= 1.20 * risk_pts or opt_gain_pct >= 18.0:
+                if candles_held >= 1:
+                    # Tier 1: Fee-Guaranteed Breakeven Lock (+0.70R / Spot +0.35% / Option +7.0% gain)
+                    if mfe_pts >= 0.70 * risk_pts or opt_gain_pct >= 7.0 or mfe_pct >= 0.35:
+                        be_buf = max(75.0, 0.12 * risk_pts)
                         if is_long:
-                            pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + (0.15 * risk_pts))
+                            pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + be_buf)
                         else:
-                            pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - (0.15 * risk_pts))
+                            pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - be_buf)
 
-                    # Tier 2: Solid Expansion (Option +28% / Spot +1.10% / 1.80R move) -> Lock +0.80R Profit
-                    if fav >= 1.80 * risk_pts or opt_gain_pct >= 28.0:
+                    # Tier 2: Solid Expansion Lock (+1.20R / Spot +0.60% / Option +12.0% gain)
+                    if mfe_pts >= 1.20 * risk_pts or opt_gain_pct >= 12.0 or mfe_pct >= 0.60:
+                        if is_long:
+                            pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + (0.40 * risk_pts))
+                        else:
+                            pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - (0.40 * risk_pts))
+
+                    # Tier 3: High Momentum Lock (+1.80R / Spot +0.90% / Option +18.0% gain)
+                    if mfe_pts >= 1.80 * risk_pts or opt_gain_pct >= 18.0 or mfe_pct >= 0.90:
                         if is_long:
                             pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + (0.80 * risk_pts))
                         else:
                             pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - (0.80 * risk_pts))
 
-                    # Tier 3: High Momentum (Option +40% / Spot +1.50% / 2.50R move) -> Lock +1.50R Profit
-                    if fav >= 2.50 * risk_pts or opt_gain_pct >= 40.0:
-                        if is_long:
-                            pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + (1.50 * risk_pts))
-                        else:
-                            pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - (1.50 * risk_pts))
-
-                    # Tier 4: Super Runner (Option +55%+ / Spot +2.0%+ / 3.20R+) -> Dynamic Trailing 0.70R behind Peak
-                    if fav >= 3.20 * risk_pts or opt_gain_pct >= 55.0:
+                    # Tier 4: Super Runner (+2.50R+ / Spot +1.20%+ / Option +24.0%+)
+                    # Trails 0.80R behind peak excursion so large 3000-5000 pt moves can run!
+                    if mfe_pts >= 2.50 * risk_pts or opt_gain_pct >= 24.0 or mfe_pct >= 1.20:
                         peak_level = pos_entry_price + mfe_pts if is_long else pos_entry_price - mfe_pts
                         if is_long:
-                            pos_trailing_sl = max(pos_trailing_sl, peak_level - (0.70 * risk_pts))
+                            pos_trailing_sl = max(pos_trailing_sl, peak_level - (0.80 * risk_pts))
                         else:
-                            pos_trailing_sl = min(pos_trailing_sl, peak_level + (0.70 * risk_pts))
+                            pos_trailing_sl = min(pos_trailing_sl, peak_level + (0.80 * risk_pts))
 
                 exit_triggered = False
                 exit_price = 0.0
                 exit_reason = ""
                 slip_pts = self.slippage_model.calculate_slippage_points(bar_close, tick_size)
 
-                # Check if current trailing SL is at/above breakeven (profitable protection)
-                is_trailing_profitable = (pos_trailing_sl >= pos_entry_price) if is_long else (pos_trailing_sl <= pos_entry_price)
-                sl_reason_code = "TRAILING_SL" if is_trailing_profitable else "SL_HIT"
+                # Active SL level: initial structural stop on entry candle, trailing stop once established
+                current_sl_level = pos_trailing_sl if candles_held >= 1 else pos_sl
+                is_trailing_profitable = (current_sl_level >= pos_entry_price) if is_long else (current_sl_level <= pos_entry_price)
+                sl_reason_code = "TRAILING_SL" if (candles_held >= 1 and is_trailing_profitable) else "SL_HIT"
 
                 # EOD Squareoff at 23:15
                 if bar_time.time() >= time(23, 15):
@@ -651,7 +666,7 @@ class CommodityEnsembleEngine:
                 # Check SL / Target
                 if not exit_triggered:
                     target_hit = bar_high >= pos_target if is_long else bar_low <= pos_target
-                    sl_hit = bar_low <= pos_trailing_sl if is_long else bar_high >= pos_trailing_sl
+                    sl_hit = bar_low <= current_sl_level if is_long else bar_high >= current_sl_level
 
                     if target_hit and sl_hit:
                         if self.same_bar_rule == SameBarAmbiguityRule.TARGET_FIRST:
@@ -660,7 +675,7 @@ class CommodityEnsembleEngine:
                             exit_reason = "TARGET_HIT"
                         else:
                             exit_triggered = True
-                            exit_price = pos_trailing_sl - slip_pts if is_long else pos_trailing_sl + slip_pts
+                            exit_price = current_sl_level - slip_pts if is_long else current_sl_level + slip_pts
                             exit_reason = sl_reason_code
                     elif target_hit:
                         exit_triggered = True
@@ -668,7 +683,7 @@ class CommodityEnsembleEngine:
                         exit_reason = "TARGET_HIT"
                     elif sl_hit:
                         exit_triggered = True
-                        exit_price = pos_trailing_sl - slip_pts if is_long else pos_trailing_sl + slip_pts
+                        exit_price = current_sl_level - slip_pts if is_long else current_sl_level + slip_pts
                         exit_reason = sl_reason_code
 
                 if exit_triggered:

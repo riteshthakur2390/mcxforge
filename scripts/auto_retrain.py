@@ -46,11 +46,15 @@ except ImportError:
     ML_MODELS_DIR  = "ml/saved_models"
     TELEGRAM_ENABLED = False
 
-LEDGER_DB  = Path(JOURNAL_DIR) / "signalforge.db"
+LEDGER_DB  = Path(JOURNAL_DIR) / "mcxforge.db"
 MODEL_PATH = (
-    Path(ML_MODELS_DIR) / "silvermic_5minute.pkl"
-    if (Path(ML_MODELS_DIR) / "silvermic_5minute.pkl").exists()
-    else Path(ML_MODELS_DIR) / "nifty_5minute.pkl"
+    Path(ML_MODELS_DIR) / "silverm_5minute.pkl"
+    if (Path(ML_MODELS_DIR) / "silverm_5minute.pkl").exists()
+    else (
+        Path(ML_MODELS_DIR) / "silvermic_5minute.pkl"
+        if (Path(ML_MODELS_DIR) / "silvermic_5minute.pkl").exists()
+        else Path(ML_MODELS_DIR) / "commodity_5minute.pkl"
+    )
 )
 BACKUP_DIR = Path(ML_MODELS_DIR) / "backups"
 MIN_TRADES = 50      # minimum trades needed to retrain
@@ -260,7 +264,7 @@ def main() -> None:
     args = parser.parse_args()
 
     print(f"\n{'═'*55}")
-    print(f"  SignalForge — Auto ML Retraining Pipeline")
+    print(f"  MCXForge — Auto ML Retraining Pipeline")
     print(f"  Date: {date.today()}  |  Window: last {args.days} days")
     print(f"{'═'*55}\n")
 

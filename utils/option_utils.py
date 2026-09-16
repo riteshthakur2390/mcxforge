@@ -5,6 +5,9 @@ Premium estimation and expiry calculation.
 Used by Agent 4 (Trade Planner) and Agent 6 (Position Manager).
 """
 
+from __future__ import annotations
+
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -23,7 +26,7 @@ from config.settings import (
 )
 
 INDEX_SPECS = {
-    "NIFTY": {"weekly_expiry_weekday": 1, "lot_size": NIFTY_LOT_SIZE, "strike_step": NIFTY_STRIKE_STEP},
+    "NIFTY": {"weekly_expiry_weekday": 1, "lot_size": NIFTY_LOT_SIZE, "strike_step": 50},
     "SENSEX": {"weekly_expiry_weekday": 4, "lot_size": SENSEX_LOT_SIZE, "strike_step": SENSEX_STRIKE_STEP},
 }
 NIFTY_WEEKLY_EXPIRY_WEEKDAY = INDEX_SPECS["NIFTY"]["weekly_expiry_weekday"]
@@ -94,10 +97,29 @@ class OptionValidationResult:
     moneyness: str = ""
 
 
+COMMODITY_DEFAULT_IV = {
+    "SILVER": 0.38,
+    "SILVERM": 0.38,
+    "SILVERMIC": 0.38,
+    "GOLD": 0.18,
+    "GOLDM": 0.18,
+    "CRUDE": 0.42,
+    "CRUDEOIL": 0.42,
+    "CRUDEOILM": 0.42,
+    "NATGAS": 0.65,
+    "NATGASMINI": 0.65,
+    "NATURALGAS": 0.65,
+    "NIFTY": 0.14,
+    "BANKNIFTY": 0.18,
+    "SENSEX": 0.14,
+}
+
+
 def estimate_atm_premium(
     underlying: float,
     days_to_expiry: int,
-    iv: float = 0.14
+    iv: Optional[float] = None,
+    symbol: str = "",
 ) -> float:
     """
     ATM option premium approximation using simplified Black-Scholes.
@@ -105,16 +127,40 @@ def estimate_atm_premium(
     where T = days_to_expiry / 365
 
     Args:
-        underlying:       NIFTY spot price
+        underlying:       Spot price
         days_to_expiry:   calendar days until expiry
-        iv:               implied volatility (default 14% = normal NIFTY)
+        iv:               implied volatility (if None or 0.14, uses commodity-specific IV)
+        symbol:           commodity / instrument symbol to determine appropriate IV
 
     Returns:
         Estimated premium rounded to nearest ₹5
     """
-    T       = max(days_to_expiry, 1) / 365
-    premium = 0.4 * iv * np.sqrt(T) * underlying
+    T = max(days_to_expiry, 1) / 365
+    sym_clean = str(symbol or "").upper().strip()
+    effective_iv = iv
+
+    if effective_iv is None or effective_iv <= 0.0 or effective_iv == 0.14:
+        matched_iv = None
+        for k, v in COMMODITY_DEFAULT_IV.items():
+            if k in sym_clean or sym_clean.startswith(k):
+                matched_iv = v
+                break
+        if matched_iv is not None:
+            effective_iv = matched_iv
+        elif underlying > 150000.0:  # Silver
+            effective_iv = 0.38
+        elif underlying > 50000.0:   # Gold
+            effective_iv = 0.18
+        elif 3000.0 < underlying < 15000.0:  # Crude
+            effective_iv = 0.42
+        elif underlying < 1000.0:    # NatGas
+            effective_iv = 0.65
+        else:
+            effective_iv = iv if (iv is not None and iv > 0) else 0.14
+
+    premium = 0.4 * effective_iv * np.sqrt(T) * underlying
     return float(round(round(premium / 5) * 5, 1))
+
 
 
 def estimate_option_pnl(
@@ -196,18 +242,51 @@ def estimate_round_trip_costs(
 def get_nearest_expiry(
     min_days: int = MIN_DAYS_TO_EXPIRY,
     reference_date: Union[date, datetime, None] = None,
-    symbol: str = "NIFTY",
+    symbol: str | None = None,
 ) -> tuple[date, int]:
     """
-    Returns nearest valid weekly expiry with at least min_days remaining.
-    For MCX commodities (SILVERMIC, GOLD, CRUDEOIL, etc.), delegates to instrument selector.
+    Returns nearest valid weekly/monthly expiry with at least min_days remaining.
+    For MCX commodities (SILVERM, SILVERMIC, GOLD, CRUDEOIL, etc.), queries active Dhan
+    scrip master to resolve real live option expiry dates (e.g. 24Sep2026).
     """
-    sym_upper = str(symbol or "").upper()
-    if sym_upper not in INDEX_SPECS:
+    sym = str(symbol or "").upper().strip()
+    if not sym:
+        ref_dt = reference_date.date() if isinstance(reference_date, datetime) else (reference_date or date.today())
+        if ref_dt < date(2026, 6, 1):
+            sym = "NIFTY"
+        else:
+            sym = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper().strip()
+
+    if sym not in INDEX_SPECS:
+        ref = reference_date.date() if isinstance(reference_date, datetime) else (reference_date or date.today())
+        try:
+            from broker.factory import get_broker
+            broker = get_broker()
+            if hasattr(broker, "_get_mcx_scrip_master"):
+                df_mcx = broker._get_mcx_scrip_master()
+                if not df_mcx.empty:
+                    names = ["SILVERM", "SILVER"] if "SILVER" in sym else ([sym + "M", sym] if not sym.endswith("M") else [sym, sym[:-1]])
+                    sub = df_mcx[(df_mcx["SM_SYMBOL_NAME"].isin(names)) & (df_mcx["SEM_OPTION_TYPE"].isin(["CE", "PE"]))]
+                    if not sub.empty:
+                        ref_str = ref.isoformat()
+                        future_exp = sorted([
+                            exp[:10] for exp in sub["SEM_EXPIRY_DATE"].astype(str).unique()
+                            if exp[:10] >= ref_str
+                        ])
+                        if future_exp:
+                            exp_dt = date.fromisoformat(future_exp[0])
+                            dte = (exp_dt - ref).days
+                            if dte >= min_days:
+                                return exp_dt, dte
+                            elif len(future_exp) > 1:
+                                exp_dt = date.fromisoformat(future_exp[1])
+                                return exp_dt, (exp_dt - ref).days
+        except Exception:
+            pass
+
         try:
             from utils.instrument_selector import get_nearest_expiry as mcx_get_nearest_expiry
-            ref = reference_date.date() if isinstance(reference_date, datetime) else (reference_date or date.today())
-            return mcx_get_nearest_expiry(min_days=min_days, ref_date=ref, symbol=sym_upper)
+            return mcx_get_nearest_expiry(min_days=min_days, ref_date=ref, symbol=sym)
         except Exception:
             pass
 
@@ -217,90 +296,98 @@ def get_nearest_expiry(
         today = reference_date
     else:
         today = date.today()
-    expiry = get_weekly_expiry(today, symbol=symbol)
+    expiry = get_weekly_expiry(today, symbol=sym)
     days_to_exp = (expiry - today).days
 
     if days_to_exp < min_days:
         next_week_ref = today + timedelta(days=7)
-        expiry = get_weekly_expiry(next_week_ref, symbol=symbol)
+        expiry = get_weekly_expiry(next_week_ref, symbol=sym)
         days_to_exp = (expiry - today).days
 
     return expiry, days_to_exp
 
 
-def get_weekly_expiry(reference_day: date, symbol: str = "NIFTY") -> date:
-    sym_upper = str(symbol or "").upper()
-    if sym_upper not in INDEX_SPECS:
+def get_weekly_expiry(reference_day: date, symbol: str | None = None) -> date:
+    sym = str(symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    if sym not in INDEX_SPECS:
         try:
             from utils.instrument_selector import get_weekly_expiry as mcx_get_weekly_expiry
-            return mcx_get_weekly_expiry(trade_date=reference_day, symbol=sym_upper)
+            return mcx_get_weekly_expiry(trade_date=reference_day, symbol=sym)
         except Exception:
             pass
 
-    weekday = expiry_weekday(symbol)
+    weekday = expiry_weekday(sym)
     days_to_expiry = (weekday - reference_day.weekday()) % 7
     expiry = reference_day + timedelta(days=days_to_expiry)
-    exchange = "BSE" if symbol.upper() == "SENSEX" else "NSE"
+    exchange = "BSE" if sym == "SENSEX" else "NSE"
     if days_to_expiry == 0 and not is_trading_day(expiry, exchange=exchange):
         expiry += timedelta(days=7)
-    return previous_trading_day(expiry, symbol=symbol)
+    if is_trading_day(expiry, exchange=exchange):
+        return expiry
+    return previous_trading_day(expiry, symbol=sym)
 
 
-def expiry_weekday(symbol: str) -> int:
-    spec = INDEX_SPECS.get(str(symbol or "NIFTY").upper())
+def expiry_weekday(symbol: str | None = None) -> int:
+    sym = str(symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    spec = INDEX_SPECS.get(sym)
     if spec is None:
         return 4  # Default Friday if not specified
     return int(spec["weekly_expiry_weekday"])
 
 
-def is_expiry_day(day: Union[date, datetime], symbol: str = "NIFTY") -> bool:
-    sym_upper = str(symbol or "").upper()
-    if sym_upper not in INDEX_SPECS:
+def is_expiry_day(day: Union[date, datetime], symbol: str | None = None) -> bool:
+    sym = str(symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    if sym not in INDEX_SPECS:
         try:
             from utils.instrument_selector import is_expiry_day as mcx_is_expiry_day
             ref = day.date() if isinstance(day, datetime) else day
-            return mcx_is_expiry_day(day=ref, symbol=sym_upper)
+            return mcx_is_expiry_day(day=ref, symbol=sym)
         except Exception:
             pass
     ref = day.date() if isinstance(day, datetime) else day
-    return ref == get_weekly_expiry(ref, symbol=symbol)
+    return ref == get_weekly_expiry(ref, symbol=sym)
 
 
-def get_index_lot_size(symbol: str) -> int:
-    spec = INDEX_SPECS.get(str(symbol or "NIFTY").upper())
+def get_index_lot_size(symbol: str | None = None) -> int:
+    sym = str(symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    spec = INDEX_SPECS.get(sym)
     if spec is None:
         try:
             from utils.instrument_selector import get_instrument
-            return get_instrument(str(symbol or "").upper()).lot_size
+            return get_instrument(sym).lot_size
         except Exception:
             return 1
     return int(spec["lot_size"])
 
 
-def get_index_strike_step(symbol: str) -> int:
-    spec = INDEX_SPECS.get(str(symbol or "NIFTY").upper())
+def get_index_strike_step(symbol: str | None = None) -> int:
+    sym = str(symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    if "SILVER" in sym:
+        return 1000  # MCX Silver options trade in 1000 strike steps
+    spec = INDEX_SPECS.get(sym)
     if spec is None:
         try:
             from utils.instrument_selector import get_instrument
-            return get_instrument(str(symbol or "").upper()).strike_step
+            return get_instrument(sym).strike_step
         except Exception:
-            return 500
+            return 1000 if "SILVER" in sym else 500
     return int(spec["strike_step"])
 
 
-def previous_trading_day(day: date, symbol: str = "NIFTY") -> date:
-    exchange = "BSE" if symbol.upper() == "SENSEX" else "NSE"
-    current = day
+def previous_trading_day(day: date, symbol: str | None = None) -> date:
+    sym = str(symbol or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    exchange = "BSE" if sym == "SENSEX" else "NSE"
+    current = day - timedelta(days=1)
     while not is_trading_day(current, exchange=exchange):
         current -= timedelta(days=1)
     return current
 
 
 def build_option_symbol(
-    symbol:      str,
-    expiry_date: date,
-    strike:      int,
-    option_type: str,         # "CE" or "PE"
+    symbol:      str | None = None,
+    expiry_date: "date" = None,
+    strike:      int = 0,
+    option_type: str = "CE",
 ) -> str:
     """
     Build canonical option symbol.
@@ -308,23 +395,25 @@ def build_option_symbol(
     Example: CRUDEOIL-17Sep2026-7000-CE, SILVERM-24Sep2026-285000-PE
     For NSE: NIFTY25MAR2722500CE
     """
-    sym_upper = str(symbol).upper().strip()
+    sym_upper = str(symbol or os.getenv("INSTRUMENT", "SILVERM")).upper().strip()
     is_mcx = (
         sym_upper in ("CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI", "SILVER", "SILVERM", "SILVERMIC", "GOLD", "GOLDM")
         or any(k in sym_upper for k in ("SILVER", "GOLD", "CRUDE", "NAT"))
     )
     if is_mcx:
         root = "SILVERM" if sym_upper == "SILVERMIC" else sym_upper
-        exp_str = expiry_date.strftime("%d%b%Y")
+        exp_str = expiry_date.strftime("%d%b%Y") if expiry_date else ""
         return f"{root}-{exp_str}-{int(strike)}-{option_type.upper()}"
 
-    expiry_str = expiry_date.strftime("%y%b%d").upper()
-    return f"{symbol}{expiry_str}{int(strike)}{option_type}"
+    expiry_str = expiry_date.strftime("%y%b%d").upper() if expiry_date else ""
+    return f"{sym_upper}{expiry_str}{int(strike)}{option_type}"
 
 
-def get_atm_strike(ltp: float, strike_step: int = NIFTY_STRIKE_STEP) -> int:
+def get_atm_strike(ltp: float, strike_step: int | None = None, symbol: str | None = None) -> int:
     """Round LTP to nearest strike step to get ATM strike."""
-    step = max(int(strike_step or 50), 1)
+    if strike_step is None:
+        strike_step = get_index_strike_step(symbol)
+    step = max(int(strike_step or 500), 1)
     return int(round(ltp / step) * step)
 
 
@@ -333,9 +422,10 @@ def classify_strike_moneyness(
     underlying: float,
     strike: int,
     option_type: str,
-    strike_step: int = NIFTY_STRIKE_STEP,
+    strike_step: int | None = None,
+    symbol: str | None = None,
 ) -> str:
-    atm = get_atm_strike(underlying, strike_step)
+    atm = get_atm_strike(underlying, strike_step, symbol=symbol)
     if strike == atm:
         return "ATM"
     if option_type == "CE":
@@ -344,27 +434,21 @@ def classify_strike_moneyness(
 
 
 def get_nearest_expiry_for_instrument(
-    instrument_name: str = "NIFTY",
+    instrument_name: str | None = None,
     min_days: int = MIN_DAYS_TO_EXPIRY,
 ) -> tuple["date", int]:
-    today = date.today()
-    target_weekday = expiry_weekday(instrument_name)
-    days_ahead = (target_weekday - today.weekday()) % 7
-    expiry = today + timedelta(days=days_ahead)
-    dte    = (expiry - today).days
-    if dte < min_days:
-        expiry = expiry + timedelta(weeks=1)
-        dte    = (expiry - today).days
-    return expiry, dte
+    sym = str(instrument_name or os.getenv("INSTRUMENT", "SILVERM")).upper()
+    return get_nearest_expiry(min_days=min_days, symbol=sym)
 
 
 def build_option_symbol_for_instrument(
-    instrument_name: str,
-    expiry_date:     "date",
-    strike:          int,
-    option_type:     str,
+    instrument_name: str | None = None,
+    expiry_date:     "date" = None,
+    strike:          int = 0,
+    option_type:     str = "CE",
 ) -> str:
-    return build_option_symbol(instrument_name, expiry_date, strike, option_type)
+    sym = str(instrument_name or os.getenv("INSTRUMENT", "SILVERM")).upper()
+    return build_option_symbol(sym, expiry_date, strike, option_type)
 
 
 def validate_option_contract(
@@ -417,10 +501,10 @@ def validate_option_contract(
     strike_step = int(strike_step or get_index_strike_step(symbol))
     if strike <= 0 or strike % strike_step != 0:
         return OptionValidationResult(False, "non_tradable_strike", expected, expiry_date, strike, opt_type_upper)
-    if expiry_date != previous_trading_day(expiry_date):
-        return OptionValidationResult(False, "expiry_not_trading_day", expected, expiry_date, strike, opt_type_upper)
     if expiry_date != get_weekly_expiry(expiry_date, symbol=symbol):
         return OptionValidationResult(False, "invalid_weekly_expiry", expected, expiry_date, strike, opt_type_upper)
+    if not is_trading_day(expiry_date):
+        return OptionValidationResult(False, "expiry_not_trading_day", expected, expiry_date, strike, opt_type_upper)
 
     moneyness = classify_strike_moneyness(
         underlying=underlying,

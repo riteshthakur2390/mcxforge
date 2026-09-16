@@ -144,7 +144,7 @@ class TradeLedger:
             "date":            date.today().isoformat(),
             "entry_time":      entry.get("entry_time", now.strftime("%H:%M:%S")),
             "exit_time":       exit_.get("exit_time",  now.strftime("%H:%M:%S")),
-            "symbol":          "NIFTY",
+            "symbol":          str(entry.get("symbol") or sig.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper(),
             "option_symbol":   option_sym,
             "direction":       sig.get("direction", exit_.get("direction", "")),
             "expiry":          parts.get("expiry", ""),

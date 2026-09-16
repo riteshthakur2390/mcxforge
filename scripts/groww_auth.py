@@ -96,7 +96,7 @@ except ImportError:
 
 print()
 print("╔════════════════════════════════════════════════╗")
-print("║   SignalForge — Groww Daily Auth               ║")
+print("║   MCXForge — Groww Daily Auth                  ║")
 print(f"║   {datetime.now(IST).strftime('%Y-%m-%d  %H:%M IST')}                        ║")
 print("╚════════════════════════════════════════════════╝")
 print()
@@ -212,15 +212,15 @@ if current_broker.lower() != "groww":
 # ── Step 5: Restart Docker container ──────────────────────────────────────
 print()
 print("━" * 52)
-print("  STEP 5 — Restarting SignalForge Container")
+print("  STEP 5 — Restarting MCXForge Container")
 print("━" * 52)
 print()
 
 result = subprocess.run(
-    ["docker", "ps", "--filter", "name=signalforge", "--format", "{{.Names}}"],
+    ["docker", "ps", "--filter", "name=mcxforge", "--filter", "name=signalforge", "--format", "{{.Names}}"],
     capture_output=True, text=True,
 )
-if "signalforge" in result.stdout:
+if "mcxforge" in result.stdout or "signalforge" in result.stdout:
     print("  Container running — restarting with new token...")
     restart = subprocess.run(
         ["docker-compose", "restart"],

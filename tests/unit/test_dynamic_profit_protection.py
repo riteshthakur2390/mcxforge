@@ -42,7 +42,7 @@ async def test_momentum_breakeven_lock_at_5pct():
     manager._entry_nifty_ltp = 24500.0
     manager._quantity = 65
     manager._initial_quantity = 65
-    manager.data_agent = type("DummyDataAgent", (), {"get_option_ltp": lambda sym: 106.0})()
+    manager.data_agent = type("DummyDataAgent", (), {"get_option_ltp": lambda *args, **kwargs: 106.0})()
 
     # Premium surges to 106.0 (+6.0% gain)
     ts = datetime(2026, 8, 27, 9, 35, tzinfo=IST)

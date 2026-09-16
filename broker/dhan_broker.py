@@ -80,16 +80,19 @@ DHAN_SECURITY_IDS = {
     "SENSEX": "51",  # BSE SENSEX 30 (BSE_INDEX)
     "BSE SENSEX": "51",
     "SENSEX 30": "51",
-    # MCX Commodities & Futures
-    "SILVERMIC": "562058",  # Active Silver Micro contract
+    # MCX Commodities & Futures (Active contracts from Dhan scrip master)
+    "SILVERM": "483080",      # SILVERM-30Nov2026-FUT
+    "SILVERMIC": "562058",    # SILVERMIC-30Nov2026-FUT
     "SILVERMIC-30NOV2026-FUT": "562058",
-    "SILVERM": "483080",
-    "SILVER": "471725",
-    "GOLD": "495214",
-    "GOLDM": "495214",
-    "CRUDEOIL": "562060",
-    "CRUDEOILM": "562060",
-    "NATURALGAS": "562061",
+    "SILVER": "495214",       # SILVER-04Dec2026-FUT
+    "GOLD": "483079",         # GOLD-05Oct2026-FUT
+    "GOLDM": "569003",        # GOLDM-05Oct2026-FUT
+    "CRUDEOIL": "565899",     # CRUDEOIL-21Sep2026-FUT
+    "CRUDEOILM": "565900",    # CRUDEOILM-21Sep2026-FUT
+    "NATURALGAS": "568245",   # NATURALGAS-25Sep2026-FUT
+    "NATGASMINI": "568246",   # NATGASMINI-25Sep2026-FUT
+    "NATGAS":     "568246",   # NATGASMINI alias
+    "NATGASM":    "568246",   # NATGASMINI alias
 }
 # Dhan exchange segment for SENSEX options is BSE_FNO
 SENSEX_DHAN_INDEX_SEG  = "BSE_INDEX"
@@ -102,6 +105,20 @@ class Seg:
     NSE_FNO   = "NSE_FNO"     # NSE F&O (options/futures)
     BSE_EQ    = "BSE_EQ"      # BSE equity
     MCX_COMM  = "MCX_COMM"    # MCX Commodities (Silver, Gold, Crude, NatGas)
+
+def is_mcx_symbol(symbol: str) -> bool:
+    """Return True if symbol is an MCX commodity (Silver, Gold, Crude, NatGas, etc.)."""
+    s = str(symbol).upper().strip()
+    return (
+        s in (
+            "SILVERMIC", "SILVER", "SILVERM",
+            "GOLD", "GOLDM", "CRUDEOIL", "CRUDEOILM",
+            "NATURALGAS", "NATGAS", "NATGASMINI", "NATGASM",
+            "COPPER", "ZINC", "ALUMINIUM", "LEAD", "NICKEL",
+        )
+        or any(k in s for k in ("SILVER", "GOLD", "CRUDE", "NATGAS", "NATURALGAS", "COPPER", "ZINC", "ALUM", "LEAD", "NICKEL"))
+        or s.startswith("MCX")
+    )
 
 # ── Dhan candle interval map ──────────────────────────────────────────────────
 # SignalForge interval string → Dhan interval string
@@ -151,6 +168,8 @@ class DhanBroker(BaseBroker):
         self._data_api_last_log_at = 0.0
         self._vix_fallback_last_log_at = 0.0
         self._option_chain_network_last_log_at = 0.0
+        self._secondary_broker = None
+        self._last_dhan_marketfeed_at = 0.0
         os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 
         # Persistent HTTP connection pool for sub-50ms broker API round-trips
@@ -186,6 +205,59 @@ class DhanBroker(BaseBroker):
     @property
     def broker_name(self) -> str:
         return "dhan"
+
+    @property
+    def name(self) -> str:
+        return "dhan"
+
+    @property
+    def is_connected(self) -> bool:
+        return bool(self._access_token and self._client_id and self._dhan is not None)
+
+    def _get_secondary_broker(self):
+        """Lazily initialize and return the secondary broker (Upstox) for seamless failover."""
+        if self._secondary_broker is not None:
+            return self._secondary_broker
+        try:
+            from broker.upstox_broker import UpstoxBroker
+            upstox = UpstoxBroker()
+            if upstox._can_use_upstox():
+                self._secondary_broker = upstox
+                return self._secondary_broker
+        except Exception as exc:
+            logger.debug(f"[DhanBroker] Secondary broker (Upstox) unavailable: {exc}")
+        return None
+
+    def _recover_from_parquet_cache(self, option_symbol: str) -> float:
+        """Recover last known close from local parquet option candles when both brokers are unreachable."""
+        try:
+            from utils.option_utils import OPTION_SYMBOL_RE
+            match = OPTION_SYMBOL_RE.match(str(option_symbol or "").upper().strip())
+            if not match:
+                return 0.0
+            symbol, yy, mon, dd, strike, option_type = match.groups()
+            import glob
+            import pandas as pd
+            patterns = [
+                os.path.join(DATA_CACHE_DIR, f"{symbol}_options_5minute_*.parquet"),
+                os.path.join(DATA_CACHE_DIR, f"{symbol}*_options_*.parquet"),
+            ]
+            for pat in patterns:
+                for fpath in glob.glob(pat):
+                    df = pd.read_parquet(fpath)
+                    if df.empty:
+                        continue
+                    sub = df[
+                        (pd.to_numeric(df["strike"], errors="coerce") == int(strike))
+                        & (df["option_type"].astype(str).str.upper() == option_type.upper())
+                    ]
+                    if not sub.empty:
+                        close = float(pd.to_numeric(sub.iloc[-1].get("close"), errors="coerce") or 0.0)
+                        if close > 0:
+                            return close
+        except Exception as exc:
+            logger.debug(f"[DhanBroker] Parquet recovery failed for {option_symbol}: {exc}")
+        return 0.0
 
     # ── AUTH ──────────────────────────────────────────────────────────────────
     # Dhan does not use this app's OAuth redirect flow. Tokens are generated
@@ -417,16 +489,7 @@ class DhanBroker(BaseBroker):
         Endpoint: POST /v2/marketfeed/ltp
         """
         sym_upper = symbol.upper().strip()
-        is_mcx = (
-            sym_upper in (
-                "SILVERMIC", "SILVER", "SILVERM",
-                "GOLD", "GOLDM", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"
-            )
-            or "SILVERMIC" in sym_upper
-            or "GOLD" in sym_upper
-            or "CRUDE" in sym_upper
-            or sym_upper.startswith("MCX")
-        )
+        is_mcx = is_mcx_symbol(sym_upper)
         security_id = self.get_instrument_key(symbol, exchange="MCX" if is_mcx else "NSE") or DHAN_SECURITY_IDS.get(sym_upper, "")
         if not security_id:
             logger.warning(f"[DhanBroker] get_ltp: unknown symbol '{symbol}'")
@@ -456,10 +519,12 @@ class DhanBroker(BaseBroker):
                 else:
                     seg = Seg.NSE_INDEX
 
+                sec_id_val = int(security_id) if str(security_id).isdigit() else str(security_id)
+                self._last_dhan_marketfeed_at = time.monotonic()
                 resp = requests.post(
                     f"{DHAN_BASE_URL}/v2/marketfeed/ltp",
                     headers=self._headers(),
-                    json={seg: [str(security_id)]},
+                    json={seg: [sec_id_val]},
                     timeout=quote_timeout,
                 )
 
@@ -497,13 +562,14 @@ class DhanBroker(BaseBroker):
                     resp = requests.post(
                         f"{DHAN_BASE_URL}/v2/marketfeed/quote",
                         headers=self._headers(),
-                        json={seg: [str(security_id)]},
+                        json={seg: [sec_id_val]},
                         timeout=quote_timeout,
                     )
                     if resp.status_code == 200:
                         seg_data = resp.json().get("data", {}).get(seg, {})
 
-                price = float(seg_data.get(str(security_id), {}).get("last_price", 0.0))
+                sec_entry = seg_data.get(str(security_id)) or seg_data.get(sec_id_val) or {}
+                price = float(sec_entry.get("last_price", 0.0) or 0.0)
                 if price == 0.0:
                     price = self._ltp_from_intraday_chart(sym_upper, str(security_id))
                 if price == 0.0 and is_mcx:
@@ -570,16 +636,7 @@ class DhanBroker(BaseBroker):
         try:
             import requests
 
-            is_mcx = (
-                sym_upper in (
-                    "SILVERMIC", "SILVER", "SILVERM",
-                    "GOLD", "GOLDM", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"
-                )
-                or "SILVERMIC" in sym_upper
-                or "GOLD" in sym_upper
-                or "CRUDE" in sym_upper
-                or sym_upper.startswith("MCX")
-            )
+            is_mcx = is_mcx_symbol(sym_upper)
             if is_mcx:
                 chart_seg = Seg.MCX_COMM
                 instrument = "FUTCOM"
@@ -630,8 +687,10 @@ class DhanBroker(BaseBroker):
         to_date:   str,
     ) -> pd.DataFrame:
         """
-        Fetch OHLCV candles for NIFTY index in chunks to bypass Dhan limits.
+        Fetch OHLCV candles for NIFTY/SILVERM index in chunks to bypass Dhan limits.
         """
+        if str(symbol).upper() in ("SILVERMIC", "SILVER"):
+            symbol = "SILVERM"
         start_dt = datetime.strptime(from_date, "%Y-%m-%d")
         end_dt   = datetime.strptime(to_date, "%Y-%m-%d")
 
@@ -668,6 +727,8 @@ class DhanBroker(BaseBroker):
         to_date:   str,
     ) -> pd.DataFrame:
         """Internal helper to fetch a single chunk of historical data with retries."""
+        if str(symbol).upper() in ("SILVERMIC", "SILVER"):
+            symbol = "SILVERM"
         import time
         import requests
 
@@ -675,16 +736,7 @@ class DhanBroker(BaseBroker):
             return pd.DataFrame()
 
         sym_upper = symbol.upper().strip()
-        is_mcx = (
-            sym_upper in (
-                "SILVERMIC", "SILVER", "SILVERM",
-                "GOLD", "GOLDM", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"
-            )
-            or "SILVERMIC" in sym_upper
-            or "GOLD" in sym_upper
-            or "CRUDE" in sym_upper
-            or sym_upper.startswith("MCX")
-        )
+        is_mcx = is_mcx_symbol(sym_upper)
         security_id = self.get_instrument_key(symbol, exchange="MCX" if is_mcx else "NSE") or DHAN_SECURITY_IDS.get(sym_upper, "13")
         dhan_interval = INTERVAL_MAP.get(interval, "5")
 
@@ -775,10 +827,16 @@ class DhanBroker(BaseBroker):
                             f"{from_date} ({resp.status_code})"
                         )
                         return pd.DataFrame()
-                    logger.warning(
-                        f"[DhanBroker] Chunk {from_date} rejected "
-                        f"(HTTP 400): {self._response_snippet(resp, 160)}"
-                    )
+                    snippet = self._response_snippet(resp, 160)
+                    if "DH-905" in snippet or "DH-907" in snippet or "Data_Error" in snippet or "Input_Exception" in snippet:
+                        logger.debug(
+                            f"[DhanBroker] Chunk {from_date} unavailable (HTTP 400): {snippet}"
+                        )
+                    else:
+                        logger.warning(
+                            f"[DhanBroker] Chunk {from_date} rejected "
+                            f"(HTTP 400): {snippet}"
+                        )
                     return pd.DataFrame()
 
                 logger.warning(
@@ -867,6 +925,9 @@ class DhanBroker(BaseBroker):
 
         contracts = []
         sec_ids_to_fetch = []
+        now_mono = time.monotonic()
+        COALESCE_TTL_SEC = 10.0
+
         for strike in sorted({int(value) for value in strikes if int(value) > 0}):
             row = sub[sub["SEM_STRIKE_PRICE"] == float(strike)]
             if row.empty:
@@ -880,13 +941,23 @@ class DhanBroker(BaseBroker):
                 trading_symbol = str(r["SEM_TRADING_SYMBOL"])
                 self._security_id_cache[trading_symbol] = sec_id
                 self._security_id_cache[f"{sym_upper} {strike} {opt_type_str}"] = sec_id
-                sec_ids_to_fetch.append(sec_id)
+
+                # TIER 1: Check in-memory coalescing cache first
+                c_cached_val, c_cached_at = self._option_ltp_cache.get(trading_symbol.upper().strip(), (0.0, 0.0))
+                initial_ltp = 0.0
+                initial_src = "DHAN_SCRIP_MASTER"
+                if c_cached_val > 0 and (now_mono - c_cached_at) < COALESCE_TTL_SEC:
+                    initial_ltp = c_cached_val
+                    initial_src = "DHAN_COALESCED_CACHE"
+                elif fetch_live_quotes:
+                    sec_ids_to_fetch.append(sec_id)
+
                 contracts.append(OptionContract(
                     symbol=trading_symbol,
                     strike=int(float(r["SEM_STRIKE_PRICE"])),
                     option_type=opt_type_str,
                     expiry_date=str(r["SEM_EXPIRY_DATE"])[:10],
-                    last_price=0.0,
+                    last_price=initial_ltp,
                     bid_price=0.0,
                     ask_price=0.0,
                     volume=0,
@@ -894,31 +965,155 @@ class DhanBroker(BaseBroker):
                     implied_volatility=0.20,
                     delta=0.50,
                     theta=2.0,
-                    source="DHAN_SCRIP_MASTER",
+                    source=initial_src,
                 ))
 
+        # If ALL contracts hit the coalescing cache, return immediately (ZERO network overhead)
+        if fetch_live_quotes and not sec_ids_to_fetch and all(c.last_price > 0 for c in contracts):
+            return contracts
+
         # Try batch fetching live LTPs from Dhan
+        ltp_map = {}
+        dhan_failed_or_rate_limited = False
+        time_since_dhan = time.monotonic() - getattr(self, "_last_dhan_marketfeed_at", 0.0)
+
         if fetch_live_quotes and sec_ids_to_fetch and self._client_id:
+            if time.monotonic() < self._option_feed_blocked_until:
+                dhan_failed_or_rate_limited = True
+            elif time_since_dhan < 1.0:
+                # Proactive rate-limit guard: Dhan allows max 1 req/sec on marketfeed.
+                # Since Dhan handled a request < 1.0s ago, route directly to Upstox instead of triggering 429!
+                dhan_failed_or_rate_limited = True
+            else:
+                try:
+                    import requests
+                    int_sec_ids = [int(s) if str(s).isdigit() else str(s) for s in sec_ids_to_fetch]
+                    self._last_dhan_marketfeed_at = time.monotonic()
+                    resp = requests.post(
+                        f"{DHAN_BASE_URL}/v2/marketfeed/ltp",
+                        headers=self._headers(),
+                        json={Seg.MCX_COMM: int_sec_ids},
+                        timeout=3.0,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json().get("data", {}) or {}
+                        ltp_map = data.get(Seg.MCX_COMM, {}) or {}
+                    elif resp.status_code == 429:
+                        self._option_feed_blocked_until = time.monotonic() + 30.0
+                        dhan_failed_or_rate_limited = True
+                        logger.info(
+                            f"[DhanBroker] Dhan marketfeed 429 rate limit reached; pausing Dhan for 30s — Upstox handling active feed"
+                        )
+                    else:
+                        dhan_failed_or_rate_limited = True
+                except Exception as exc:
+                    dhan_failed_or_rate_limited = True
+                    logger.debug(f"[DhanBroker] MCX marketfeed/ltp request failed: {exc}")
+
+        # Update contract prices from live LTP map or cache
+        for c in contracts:
+            if c.last_price > 0:
+                continue
+            sec = self._security_id_cache.get(c.symbol)
+            c_sym_upper = c.symbol.upper().strip()
+            c_ltp = 0.0
+            if sec and sec in ltp_map:
+                c_ltp = float(ltp_map[sec].get("last_price", 0.0) or 0.0)
+            if c_ltp <= 0.0 and sec and str(sec) in ltp_map:
+                c_ltp = float(ltp_map[str(sec)].get("last_price", 0.0) or 0.0)
+            if c_ltp <= 0.0 and sec and str(sec).isdigit() and int(sec) in ltp_map:
+                c_ltp = float(ltp_map[int(sec)].get("last_price", 0.0) or 0.0)
+            if c_ltp <= 0.0:
+                cached_val, cached_at = self._option_ltp_cache.get(c_sym_upper, (0.0, 0.0))
+                if cached_val > 0 and (time.monotonic() - cached_at) < 300.0:
+                    c_ltp = cached_val
+            if c_ltp > 0:
+                c.last_price = c_ltp
+                c.source = "DHAN_LIVE"
+                self._option_ltp_cache[c_sym_upper] = (c_ltp, time.monotonic())
+
+        # If any contracts still have 0 LTP, attempt /v2/marketfeed/ohlc for last_price / previous close
+        missing_sec_ids = [
+            int(self._security_id_cache[c.symbol])
+            for c in contracts
+            if c.last_price <= 0 and c.symbol in self._security_id_cache and str(self._security_id_cache[c.symbol]).isdigit()
+        ]
+        if missing_sec_ids and fetch_live_quotes and self._client_id and not dhan_failed_or_rate_limited and time.monotonic() >= self._option_feed_blocked_until:
             try:
                 import requests
-                resp = requests.post(
-                    f"{DHAN_BASE_URL}/v2/marketfeed/ltp",
+                resp_ohlc = requests.post(
+                    f"{DHAN_BASE_URL}/v2/marketfeed/ohlc",
                     headers=self._headers(),
-                    json={Seg.MCX_COMM: sec_ids_to_fetch},
-                    timeout=2.0,
+                    json={Seg.MCX_COMM: missing_sec_ids},
+                    timeout=3.0,
                 )
-                if resp.status_code == 200:
-                    data = resp.json().get("data", {}) or {}
-                    ltp_map = data.get(Seg.MCX_COMM, {}) or {}
+                if resp_ohlc.status_code == 200:
+                    ohlc_data = (resp_ohlc.json().get("data", {}) or {}).get(Seg.MCX_COMM, {}) or {}
                     for c in contracts:
-                        sec = self._security_id_cache.get(c.symbol)
-                        if sec and sec in ltp_map:
-                            c_ltp = float(ltp_map[sec].get("last_price", 0.0) or 0.0)
-                            if c_ltp > 0:
-                                c.last_price = c_ltp
-                                c.source = "DHAN_LIVE"
+                        if c.last_price > 0:
+                            continue
+                        sec = str(self._security_id_cache.get(c.symbol, ""))
+                        item = ohlc_data.get(sec) or ohlc_data.get(int(sec) if sec.isdigit() else sec) or {}
+                        px = float(item.get("last_price", 0.0) or 0.0)
+                        if px <= 0:
+                            px = float((item.get("ohlc", {}) or {}).get("close", 0.0) or 0.0)
+                        if px > 0:
+                            c.last_price = px
+                            c.source = "DHAN_LIVE"
+                            self._option_ltp_cache[c.symbol.upper().strip()] = (px, time.monotonic())
+                elif resp_ohlc.status_code == 429:
+                    self._option_feed_blocked_until = time.monotonic() + 5.0
+                    dhan_failed_or_rate_limited = True
             except Exception:
                 pass
+
+        # ── TIER 2: DUAL-BROKER FAILOVER TO UPSTOX IF DHAN FAILED OR WAS 429 ──
+        if (dhan_failed_or_rate_limited or any(c.last_price <= 0 for c in contracts)) and fetch_live_quotes:
+            upstox = self._get_secondary_broker()
+            if upstox and getattr(upstox, "_client", None):
+                try:
+                    import upstox_client
+                    up_sec_ids = [
+                        str(self._security_id_cache[c.symbol])
+                        for c in contracts
+                        if c.last_price <= 0 and c.symbol in self._security_id_cache and str(self._security_id_cache[c.symbol]).isdigit()
+                    ]
+                    if up_sec_ids:
+                        api = upstox_client.MarketQuoteApi(upstox._client)
+                        up_keys = [f"MCX_FO|{sec}" for sec in up_sec_ids]
+                        resp = api.get_full_market_quote(",".join(up_keys), "2.0")
+                        up_data = resp.data or {}
+                        recovered_count = 0
+                        for c in contracts:
+                            if c.last_price > 0:
+                                continue
+                            sec = str(self._security_id_cache.get(c.symbol, ""))
+                            for k, q in up_data.items():
+                                if sec in k or str(c.strike) in k:
+                                    lp = float(getattr(q, "last_price", 0.0) or 0.0)
+                                    if lp > 0:
+                                        c.last_price = lp
+                                        c.bid_price = float(getattr(q, "bid_price", 0.0) or getattr(q, "buy_price", 0.0) or 0.0)
+                                        c.ask_price = float(getattr(q, "ask_price", 0.0) or getattr(q, "sell_price", 0.0) or 0.0)
+                                        c.volume = int(getattr(q, "volume", 0) or 0)
+                                        c.open_interest = int(getattr(q, "oi", 0) or 0)
+                                        c.source = "UPSTOX_FAILOVER"
+                                        self._option_ltp_cache[c.symbol.upper().strip()] = (lp, time.monotonic())
+                                        recovered_count += 1
+                                        break
+                        if recovered_count > 0:
+                            logger.info(f"[DhanBroker] 🔄 Upstox live failover succeeded for {recovered_count} MCX option contracts")
+                except Exception as exc:
+                    logger.debug(f"[DhanBroker] Upstox market quote failover failed: {exc}")
+
+        # ── TIER 3: LOCAL PARQUET CANDLE CACHE FALLBACK ───────────────────────
+        for c in contracts:
+            if c.last_price <= 0:
+                recovered = self._recover_from_parquet_cache(c.symbol)
+                if recovered > 0:
+                    c.last_price = recovered
+                    c.source = "PARQUET_STORE"
+                    self._option_ltp_cache[c.symbol.upper().strip()] = (recovered, time.monotonic())
 
         return contracts
 
@@ -934,14 +1129,7 @@ class DhanBroker(BaseBroker):
         symbol_key = str(symbol).upper().strip()
 
         # Route MCX commodity option contracts to Dhan scrip master
-        is_mcx = (
-            symbol_key in ("SILVERMIC", "SILVER", "SILVERM", "GOLD", "GOLDM", "CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI")
-            or "SILVER" in symbol_key
-            or "GOLD" in symbol_key
-            or "CRUDE" in symbol_key
-            or "NAT" in symbol_key
-            or symbol_key.startswith("MCX")
-        )
+        is_mcx = is_mcx_symbol(symbol_key)
         if is_mcx:
             return self.get_mcx_option_contracts(symbol_key, expiry, option_type, strikes)
 
@@ -1151,7 +1339,7 @@ class DhanBroker(BaseBroker):
         """
         option_key = str(option_symbol).upper().strip()
         cached_ltp, cached_at = self._option_ltp_cache.get(option_key, (0.0, 0.0))
-        if cached_ltp > 0 and time.monotonic() - cached_at <= 5.0:
+        if cached_ltp > 0 and time.monotonic() - cached_at <= 300.0:
             return cached_ltp
         parsed = self._parse_trading_option_symbol(option_key)
         if parsed:
@@ -1176,37 +1364,92 @@ class DhanBroker(BaseBroker):
             return chain_ltp or cached_ltp
         try:
             import requests
-            segment = SENSEX_DHAN_OPTION_SEG if option_key.startswith("SENSEX") else Seg.NSE_FNO
-            # For options, use the trading symbol lookup via market quote
+            if is_mcx_symbol(option_key):
+                segment = Seg.MCX_COMM
+                sec_id = self._security_id_cache.get(option_key)
+                query_items = [int(sec_id)] if (sec_id and str(sec_id).isdigit()) else [option_key]
+                url = f"{DHAN_BASE_URL}/v2/marketfeed/ltp"
+            elif option_key.startswith("SENSEX"):
+                segment = SENSEX_DHAN_OPTION_SEG
+                query_items = [option_key]
+                url = f"{DHAN_BASE_URL}/v2/marketfeed/quote"
+            else:
+                segment = Seg.NSE_FNO
+                query_items = [option_key]
+                url = f"{DHAN_BASE_URL}/v2/marketfeed/quote"
+
             resp = requests.post(
-                f"{DHAN_BASE_URL}/v2/marketfeed/quote",
+                url,
                 headers=self._headers(),
-                json={segment: [option_key]},
+                json={segment: query_items},
                 timeout=BROKER_DHAN_TIMEOUT_8,
             )
             if resp.status_code != 200:
                 self._option_ltp_blocked_until = time.monotonic() + 15.0
                 chain_ltp = self._option_ltp_from_chain_cache(option_key)
+                if chain_ltp > 0:
+                    return chain_ltp
+                upstox = self._get_secondary_broker()
+                if upstox:
+                    try:
+                        up_ltp = float(upstox.get_option_ltp(option_key) or 0.0)
+                        if up_ltp > 0:
+                            self._option_ltp_cache[option_key] = (up_ltp, time.monotonic())
+                            logger.info(f"[DhanBroker] 🔄 Upstox failover get_option_ltp({option_key}): ₹{up_ltp}")
+                            return up_ltp
+                    except Exception:
+                        pass
+                rec = self._recover_from_parquet_cache(option_key)
+                if rec > 0:
+                    return rec
                 logger.warning(
                     f"[DhanBroker] get_option_ltp({option_key}) "
                     f"HTTP {resp.status_code}: {self._response_snippet(resp, 120)}"
                 )
-                return chain_ltp or cached_ltp
+                return cached_ltp
             data = resp.json()
             seg_data = data.get("data", {}).get(segment, {})
-            ltp = float(seg_data.get(option_key, {}).get("last_price", 0.0))
+            c_data = seg_data.get(str(query_items[0]), {}) or seg_data.get(query_items[0], {})
+            ltp = float(c_data.get("last_price", 0.0) or 0.0)
             if ltp > 0:
                 self._option_ltp_cache[option_key] = (ltp, time.monotonic())
                 return ltp
-            return self._option_ltp_from_chain_cache(option_key) or cached_ltp
+            chain_ltp = self._option_ltp_from_chain_cache(option_key)
+            if chain_ltp > 0:
+                return chain_ltp
+            upstox = self._get_secondary_broker()
+            if upstox:
+                try:
+                    up_ltp = float(upstox.get_option_ltp(option_key) or 0.0)
+                    if up_ltp > 0:
+                        self._option_ltp_cache[option_key] = (up_ltp, time.monotonic())
+                        return up_ltp
+                except Exception:
+                    pass
+            rec = self._recover_from_parquet_cache(option_key)
+            return rec or cached_ltp
         except Exception as e:
             self._option_ltp_blocked_until = time.monotonic() + 15.0
             chain_ltp = self._option_ltp_from_chain_cache(option_key)
+            if chain_ltp > 0:
+                return chain_ltp
+            upstox = self._get_secondary_broker()
+            if upstox:
+                try:
+                    up_ltp = float(upstox.get_option_ltp(option_key) or 0.0)
+                    if up_ltp > 0:
+                        self._option_ltp_cache[option_key] = (up_ltp, time.monotonic())
+                        return up_ltp
+                except Exception:
+                    pass
+            rec = self._recover_from_parquet_cache(option_key)
+            if rec > 0:
+                return rec
             logger.warning(
                 f"[DhanBroker] get_option_ltp({option_key}): "
                 f"{type(e).__name__}: {e}"
             )
-            return chain_ltp or cached_ltp
+            return cached_ltp
 
     def get_india_vix(self) -> float:
         """Get India VIX using security_id='21' in NSE_INDEX with chart & yfinance fallbacks."""
@@ -1286,9 +1529,9 @@ class DhanBroker(BaseBroker):
         except Exception:
             pass
 
-        # 4. Commodity / MCX underlying futures resolution (exact symbol match)
-        for comm in ("SILVERMIC", "SILVERM", "SILVER", "GOLDM", "GOLD", "CRUDEOILM", "CRUDEOIL", "NATURALGAS"):
-            if sym == comm:
+        # 4. Commodity / MCX underlying futures resolution (prefix or exact symbol match)
+        for comm in ("SILVERMIC", "SILVERM", "SILVER", "GOLDM", "GOLD", "CRUDEOILM", "CRUDEOIL", "NATGASMINI", "NATURALGAS", "NATGAS", "NATGASM"):
+            if sym.startswith(comm) or sym == comm:
                 sec = DHAN_SECURITY_IDS.get(comm)
                 if sec:
                     self._security_id_cache[sym] = sec

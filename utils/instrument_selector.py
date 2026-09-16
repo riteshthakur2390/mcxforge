@@ -210,8 +210,8 @@ SILVERMIC_CONFIG = InstrumentConfig(
     lot_size                  = 1,             # 1 kg
     tick_size                 = 1.0,           # ₹1.00
     tick_value                = 1.0,           # ₹1.00 per point
-    round_number_step         = 500.0,         # ₹500 round levels
-    strike_step               = 500,
+    round_number_step         = 1000.0,        # ₹1000 round levels
+    strike_step               = 1000,          # MCX Silver options have 1000 strike steps
     margin_pct_estimate       = 0.13,          # ~13% SPAN + Exposure
     tender_days_before_expiry = 5,             # 5 tender days
     contract_cycle_months     = [2, 4, 6, 8, 11], # Feb, Apr, Jun, Aug, Nov
@@ -232,8 +232,8 @@ SILVERM_CONFIG = InstrumentConfig(
     lot_size                  = 5,             # 5 kg
     tick_size                 = 1.0,           # ₹1.00
     tick_value                = 5.0,           # ₹5.00 per point
-    round_number_step         = 500.0,         # ₹500 round levels
-    strike_step               = 500,
+    round_number_step         = 1000.0,        # ₹1000 round levels
+    strike_step               = 1000,          # MCX Silver options have 1000 strike steps
     margin_pct_estimate       = 0.13,          # ~13% SPAN + Exposure
     tender_days_before_expiry = 5,             # 5 tender days
     contract_cycle_months     = [2, 4, 6, 8, 11], # Feb, Apr, Jun, Aug, Nov
@@ -394,6 +394,9 @@ def get_instrument(
 def get_today_instrument() -> InstrumentConfig:
     """Convenience accessor for current session instrument."""
     return get_instrument()
+
+
+get_instrument_config = get_instrument
 
 
 def get_instrument_for_signal(signal_payload: dict) -> InstrumentConfig:

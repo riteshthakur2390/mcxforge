@@ -1111,7 +1111,7 @@ body > .wrap > .panel:last-child{ order:35; }
         <div class="idx-item"><div class="idx-label">SILVERM</div><div class="idx-value" id="idx-silverm">—</div></div>
         <div class="idx-item"><div class="idx-label">GOLD</div><div class="idx-value" id="idx-gold">—</div></div>
         <div class="idx-item"><div class="idx-label">CRUDEOIL</div><div class="idx-value" id="idx-crude">—</div></div>
-        <div class="idx-item"><div class="idx-label">SPOT</div><div class="idx-value" id="idx-nifty">—</div></div>
+        <div class="idx-item"><div class="idx-label">NATGAS</div><div class="idx-value" id="idx-natgas">—</div></div>
         <div class="idx-item">
           <div class="idx-label">UPDATED</div>
           <div class="idx-time-value" id="ltp-updated-at">—</div>
@@ -1217,28 +1217,28 @@ body > .wrap > .panel:last-child{ order:35; }
   </div>
 
   <details class="lazy-section" id="ml-model-section">
-    <summary><span id="ml-model-summary">Agent 3 Model — ML ACTIVE — 5minute xgb, lgb, rf | ml/saved_models/silvermic_5minute.pkl</span></summary>
+    <summary><span id="ml-model-summary">Agent 3 Model — ML ACTIVE — 5minute xgb, lgb, rf | ml/saved_models/silverm_5minute.pkl</span></summary>
   <div class="ml-card" id="ml-card">
     <div class="ml-card-main">
       <div class="ml-card-label">Agent 3 Model</div>
       <div class="ml-card-title val-green" id="ml-card-mode">ML ACTIVE</div>
-      <div class="ml-card-subtitle" id="ml-card-models">5minute xgb, lgb, rf | ml/saved_models/silvermic_5minute.pkl</div>
+      <div class="ml-card-subtitle" id="ml-card-models">5minute xgb, lgb, rf | ml/saved_models/silverm_5minute.pkl</div>
     </div>
     <div class="ml-card-stat">
       <div class="label">Threshold</div>
-      <div class="value val-blue" id="ml-card-threshold">0.45</div>
+      <div class="value val-blue" id="ml-card-threshold">0.32</div>
     </div>
     <div class="ml-card-stat">
       <div class="label">Val AUC</div>
-      <div class="value val-teal" id="ml-card-auc">0.550</div>
+      <div class="value val-teal" id="ml-card-auc">0.576</div>
     </div>
     <div class="ml-card-stat">
       <div class="label">Val Precision</div>
-      <div class="value val-teal" id="ml-card-precision">0.309</div>
+      <div class="value val-teal" id="ml-card-precision">0.450</div>
     </div>
     <div class="ml-card-stat">
       <div class="label">Trained</div>
-      <div class="value val-blue" id="ml-card-trained">2026-06-26</div>
+      <div class="value val-blue" id="ml-card-trained">2026-09-05</div>
     </div>
   </div>
   </details>
@@ -1273,7 +1273,10 @@ body > .wrap > .panel:last-child{ order:35; }
 
   <div class="feature-grid">
     <div class="feature-panel">
-      <div class="panel-head" id="strategy-status-head">Strategy Status (43 Strategies Active · Standby · Awaiting Candle Close)</div>
+      <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center;">
+        <span id="strategy-status-head">Strategy Status (37 Strategies Active · Standby · Awaiting Candle Close)</span>
+        <button id="btn-reset-strategies" onclick="resetStrategies()" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.18); color:var(--muted); font-size:9px; padding:2px 8px; border-radius:4px; cursor:pointer; text-transform:uppercase; letter-spacing:0.6px;" title="Reset daily strategy health counters">↺ Reset</button>
+      </div>
       <div class="strategy-grid" id="strategy-status-grid">
         <div class="strategy-pill waiting" title="TrendFollowing"><div class="strategy-pill-name">TrendFollowing</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="OpeningRangeBreakout"><div class="strategy-pill-name">OpeningRangeBreakout</div><div class="strategy-pill-meta">standby · armed</div></div>
@@ -1284,6 +1287,7 @@ body > .wrap > .panel:last-child{ order:35; }
         <div class="strategy-pill waiting" title="MACrossover"><div class="strategy-pill-name">MACrossover</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="RSIDivergence"><div class="strategy-pill-name">RSIDivergence</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="MomentumVolumeBreakout"><div class="strategy-pill-name">MomentumVolumeBreakout</div><div class="strategy-pill-meta">standby · armed</div></div>
+        <div class="strategy-pill waiting" title="GoldSilverPairs"><div class="strategy-pill-name">GoldSilverPairs</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="OrderFlowDelta"><div class="strategy-pill-name">OrderFlowDelta</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="TimeOfDaySeasonality"><div class="strategy-pill-name">TimeOfDaySeasonality</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="RSI2MeanReversion"><div class="strategy-pill-name">RSI2MeanReversion</div><div class="strategy-pill-meta">standby · armed</div></div>
@@ -1291,12 +1295,11 @@ body > .wrap > .panel:last-child{ order:35; }
         <div class="strategy-pill waiting" title="TermStructure"><div class="strategy-pill-name">TermStructure</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="SuperTrend+RSI"><div class="strategy-pill-name">SuperTrend+RSI</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="VWAP+EMA"><div class="strategy-pill-name">VWAP+EMA</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="ORB"><div class="strategy-pill-name">ORB</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="BBSqueeze"><div class="strategy-pill-name">BBSqueeze</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="ADX+PSAR"><div class="strategy-pill-name">ADX+PSAR</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="FVG"><div class="strategy-pill-name">FVG</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="UTBot"><div class="strategy-pill-name">UTBot</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="CPR"><div class="strategy-pill-name">CPR</div><div class="strategy-pill-meta">standby · armed</div></div>
+        <div class="strategy-pill waiting" title="Ichimoku"><div class="strategy-pill-name">Ichimoku</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="VolumeProfile"><div class="strategy-pill-name">VolumeProfile</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="LiqSweep"><div class="strategy-pill-name">LiqSweep</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="PriceAction"><div class="strategy-pill-name">PriceAction</div><div class="strategy-pill-meta">standby · armed</div></div>
@@ -1304,20 +1307,14 @@ body > .wrap > .panel:last-child{ order:35; }
         <div class="strategy-pill waiting" title="AMD"><div class="strategy-pill-name">AMD</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="GapDirection"><div class="strategy-pill-name">GapDirection</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="SMC"><div class="strategy-pill-name">SMC</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="ValueArea"><div class="strategy-pill-name">ValueArea</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="GapMomentum"><div class="strategy-pill-name">GapMomentum</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="ADXRising"><div class="strategy-pill-name">ADXRising</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="RangeSpread"><div class="strategy-pill-name">RangeSpread</div><div class="strategy-pill-meta">standby · armed</div></div>
+        <div class="strategy-pill waiting" title="SqueezeMomentum"><div class="strategy-pill-name">SqueezeMomentum</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="StochRSI"><div class="strategy-pill-name">StochRSI</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="EMASlope"><div class="strategy-pill-name">EMASlope</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="HeikinAshi"><div class="strategy-pill-name">HeikinAshi</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="VWAPExtreme"><div class="strategy-pill-name">VWAPExtreme</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="OpeningRangeBias"><div class="strategy-pill-name">OpeningRangeBias</div><div class="strategy-pill-meta">standby · armed</div></div>
         <div class="strategy-pill waiting" title="ElliottWave"><div class="strategy-pill-name">ElliottWave</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="StrikeMomentum"><div class="strategy-pill-name">StrikeMomentum</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="GammaExposure"><div class="strategy-pill-name">GammaExposure</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="IVContraction"><div class="strategy-pill-name">IVContraction</div><div class="strategy-pill-meta">standby · armed</div></div>
-        <div class="strategy-pill waiting" title="ExpiryWeek"><div class="strategy-pill-name">ExpiryWeek</div><div class="strategy-pill-meta">standby · armed</div></div>
       </div>
     </div>
     <div class="feature-panel" style="display:flex; flex-direction:column; height:100%; box-sizing:border-box;">
@@ -1510,7 +1507,7 @@ body > .wrap > .panel:last-child{ order:35; }
         <div class="journal-kpi">
           <div class="journal-kpi-label">Starting Capital</div>
           <div class="journal-kpi-value" id="j-start-cap">₹200,000.00</div>
-          <div class="journal-kpi-sub" id="j-start-sub">₹30,000 active fund</div>
+          <div class="journal-kpi-sub" id="j-start-sub">₹40,000 active fund</div>
         </div>
         <div class="journal-kpi">
           <div class="journal-kpi-label">Current Equity</div>
@@ -1596,26 +1593,34 @@ socket.on('signal_rejected',  (d) => addSignalCard(d, 'REJECTED'));
 socket.on('new_alert',        (d) => addAlert(d));
 socket.on('regime_update',    (d) => updateRegime(d));
 socket.on('trade_history_row',(d) => addTradeHistoryRow(d));
-socket.on('ltp_update',       (d) => {
-  const fmt = (v) => (v && Number(v) > 0) ? Number(v).toFixed(2) : '—';
+function applyCommodityLtps(d) {
+  if (!d) return;
+  const fmt = (v) => (v && Number(v) > 0) ? '₹' + Number(v).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—';
   const m = d.ltps || {};
-  const sil = m.SILVERM || m.SILVERMIC || m.SILVER || (d.symbol === 'SILVERM' || d.symbol === 'SILVERMIC' ? d.ltp : null) || d.ltp;
-  const gold = m.GOLD || m.GOLDM;
-  const crude = m.CRUDEOIL || m.CRUDEOILM;
+  const sil = m.SILVERM || m.SILVERMIC || m.SILVER || ((d.symbol && d.symbol.includes('SILVER')) ? d.ltp : (d.ltp ? d.ltp : null));
+  const gold = m.GOLD || m.GOLDM || (d.symbol === 'GOLD' ? d.ltp : null);
+  const crude = m.CRUDEOIL || m.CRUDEOILM || (d.symbol === 'CRUDEOIL' ? d.ltp : null);
+  const natgas = m.NATURALGAS || m.NATGASMINI || m.NATGAS || (d.symbol === 'NATURALGAS' ? d.ltp : null);
   const elSil = document.getElementById('idx-silverm') || document.getElementById('idx-silvermic');
-  if (elSil) elSil.textContent = fmt(sil);
+  if (elSil && sil != null) elSil.textContent = fmt(sil);
   const elGold = document.getElementById('idx-gold');
-  if (elGold) elGold.textContent = fmt(gold);
+  if (elGold && gold != null) elGold.textContent = fmt(gold);
   const elCrude = document.getElementById('idx-crude');
-  if (elCrude) elCrude.textContent = fmt(crude);
-  const elNifty = document.getElementById('idx-nifty');
-  if (elNifty) elNifty.textContent = fmt(d.ltp);
+  if (elCrude && crude != null) elCrude.textContent = fmt(crude);
+  const elNatgas = document.getElementById('idx-natgas') || document.getElementById('idx-nifty');
+  if (elNatgas && natgas != null) elNatgas.textContent = fmt(natgas);
 
   const tsRaw = d.server_timestamp || d.timestamp;
-  const ts = tsRaw ? new Date(tsRaw) : new Date();
-  const upd = ts.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour12:false});
-  const el = document.getElementById('ltp-updated-at');
-  if (el) el.textContent = upd;
+  if (tsRaw) {
+    const ts = new Date(tsRaw);
+    const upd = ts.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour12:false});
+    const el = document.getElementById('ltp-updated-at');
+    if (el) el.textContent = upd;
+  }
+}
+
+socket.on('ltp_update',       (d) => {
+  applyCommodityLtps(d);
 
   if (d.orb) {
     const h = d.orb.orb_high;
@@ -1708,14 +1713,15 @@ function updateStats(d) {
   });
   const wins = Number(d.wins ?? 0);
   const losses = Number(d.losses ?? 0);
-  const closed = wins + losses;
-  const tradesTaken = Number(d.traded ?? d.journal_rows?.length ?? closed ?? 0);
+  const closed = Number(d.closed ?? d.pipeline?.closed ?? (wins + losses));
   const openNow = d.position ? 1 : 0;
+  const tradesTaken = Number(d.traded ?? (closed + openNow) ?? 0);
   const rawSignals = Number(d.signals ?? d.pipeline?.raw_signals ?? 0);
   const approved = Number(d.approved ?? d.pipeline?.approved ?? 0);
   const suppressed = Number(d.suppressed ?? d.pipeline?.suppressed ?? 0);
   const realizedInr = Number(d.realized_pnl ?? 0);
-  stats = { ...stats, signals: rawSignals, approved, suppressed, wins, losses, pnl: Number(d.total_pnl_pct ?? 0), realized_pnl: realizedInr, traded: tradesTaken };
+  stats = { ...stats, signals: rawSignals, approved, suppressed, wins, losses, closed, pnl: Number(d.total_pnl_pct ?? 0), realized_pnl: realizedInr, traded: tradesTaken };
+  if (d.ltps || d.ltp) applyCommodityLtps(d);
 
   const signalRows = Array.isArray(d.signal_feed?.rows) ? d.signal_feed.rows : [];
   const latestSignal = signalRows[0] || null;
@@ -1788,7 +1794,7 @@ function updateStats(d) {
   const pnlEl = document.getElementById('s-pnl');
   pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
   pnlEl.className   = 'stat-value ' + (pnl >= 0 ? 'val-green' : 'val-red');
-  document.getElementById('s-pnl-sub').textContent = `₹${realizedInr >= 0 ? '+' : ''}${Math.round(realizedInr).toLocaleString('en-IN')} realized`;
+  document.getElementById('s-pnl-sub').textContent = `₹${realizedInr >= 0 ? '+' : ''}${Number(realizedInr).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2})} realized`;
   if (d.position) {
     renderPosition(d.position);
   } else {
@@ -1830,17 +1836,17 @@ function updateStats(d) {
     mlModeEl.className = 'ml-card-title ' + (ml.active && !stale ? 'val-green' : 'val-amber');
   }
   const mlModelsEl = document.getElementById('ml-card-models');
-  let mlSummaryText = 'Agent 3 Model — ML ACTIVE — 5minute xgb, lgb, rf | ml/saved_models/silvermic_5minute.pkl';
+  let mlSummaryText = 'Agent 3 Model — ML ACTIVE — 5minute xgb, lgb, rf | ml/saved_models/silverm_5minute.pkl';
   if (mlModelsEl) {
     if (ml && ml.active !== false) {
       const modelNames = (ml.models && ml.models.length ? ml.models : ['xgb', 'lgb', 'rf']).join(', ');
       const modelTf = ml.model_timeframe ? `${ml.model_timeframe} ` : '5minute ';
-      const modelPath = ml.model_path || 'ml/saved_models/silvermic_5minute.pkl';
+      const modelPath = ml.model_path || 'ml/saved_models/silverm_5minute.pkl';
       mlModelsEl.textContent = `${modelTf}${modelNames} | ${modelPath}`;
       mlSummaryText = `Agent 3 Model — ML ACTIVE — ${modelTf}${modelNames} | ${modelPath}`;
     } else {
-      mlModelsEl.textContent = '5minute xgb, lgb, rf | ml/saved_models/silvermic_5minute.pkl';
-      mlSummaryText = 'Agent 3 Model — ML ACTIVE — 5minute xgb, lgb, rf | ml/saved_models/silvermic_5minute.pkl';
+      mlModelsEl.textContent = '5minute xgb, lgb, rf | ml/saved_models/silverm_5minute.pkl';
+      mlSummaryText = 'Agent 3 Model — ML ACTIVE — 5minute xgb, lgb, rf | ml/saved_models/silverm_5minute.pkl';
     }
   }
   const mlSummaryEl = document.getElementById('ml-model-summary');
@@ -1986,7 +1992,7 @@ function syncSignalFeedHeight() {
 	  if (!grid) return;
 	  const list = Array.isArray(items) && items.length ? items : [];
 	  const head = document.getElementById('strategy-status-head');
-	  const count = (totalCount != null && Number(totalCount) > 0) ? Number(totalCount) : (list.length ? list.length : 43);
+	  const count = (totalCount != null && Number(totalCount) > 0) ? Number(totalCount) : (list.length ? list.length : 37);
 	  const evaluatedCount = list.filter((item) => Number(item.evaluated || 0) > 0).length;
 	  const votingCount = list.filter((item) => Number(item.votes_today || 0) > 0).length;
 	  const contributingCount = list.filter((item) => Number(item.fires_today || 0) > 0).length;
@@ -1998,7 +2004,7 @@ function syncSignalFeedHeight() {
 	    }
 	  }
 	  if (!list.length) {
-	    // Keep existing 43 pre-rendered standby pills
+	    // Keep existing 37 pre-rendered standby pills
 	    return;
 	  }
 	  grid.innerHTML = list.map((item) => {
@@ -2178,13 +2184,32 @@ function bumpSuppressedStat() {
   }
 }
 
+function getSignalCardKey(d) {
+  if (!d) return '';
+  const sig = d.signal ?? d;
+  const sigId = d.signal_id || sig.signal_id;
+  if (sigId) return String(sigId);
+  const tsRaw = d.timestamp || d.entry_time || d.time || d.date || '';
+  const dir = String(sig.direction ?? d.direction ?? '').toUpperCase();
+  const opt = String(d.contract_symbol ?? d.option_symbol ?? d.symbol ?? '').toUpperCase();
+  const tsStr = String(tsRaw).slice(0, 16);
+  return `${tsStr}|${dir}|${opt}`;
+}
+
 // ── SIGNAL CARD ─────────────────────────────────────────────────────────────
 function addSignalCard(d, status = '') {
+  const sig  = d.signal ?? d;
+  const votes = Number(sig.votes ?? d.votes ?? 0);
+  if (votes > 0 && votes < 4) return;
+
+  const cardKey = getSignalCardKey(d);
+  if (cardKey && hydratedSignalKeys.has(cardKey)) return;
+  if (cardKey) hydratedSignalKeys.add(cardKey);
+
   const feed = document.getElementById('signal-feed');
   const ph   = feed.querySelector('.sig-empty');
   if (ph) ph.remove();
 
-  const sig  = d.signal ?? d;
   const dir  = (sig.direction ?? d.direction ?? '').includes('CALL') ? 'CALL' : 'PUT';
   const conf = Math.round((d.ml_confidence ?? sig.confidence ?? 0.65) * 100);
   const ts   = new Date(d.timestamp ?? Date.now())
@@ -2201,6 +2226,14 @@ function addSignalCard(d, status = '') {
   const statusStr = status ? ' — ' + status : '';
   const rejectionReason = d.rejection_reason || d.planner_rejection_details || d.planner_rejection_reason || d.ml_decision_reason || d.suppression_reason || '';
   
+  const setupType = d.setup_type || sig.setup_type || (d.metadata && d.metadata._context && d.metadata._context.setup && d.metadata._context.setup.setup_type) || '—';
+  const setupStrength = Number(d.setup_strength || sig.setup_strength || (d.metadata && d.metadata._context && d.metadata._context.setup && d.metadata._context.setup.setup_strength) || 0);
+  const structureBias = d.structure_bias || sig.structure_bias || (d.metadata && d.metadata._context && d.metadata._context.setup && d.metadata._context.setup.structure_bias) || '—';
+  const regime = d.regime || sig.regime || d.market_regime || '—';
+  const rr = Number(d.risk_reward || sig.risk_reward || 0);
+  const isFuture = String(opt).toUpperCase().includes('FUT');
+  const levelLabel = isFuture ? 'ENTRY' : 'PREMIUM';
+
   const selectionNotes = d.selection_notes ?? [];
   const alternates = d.alternate_contracts ?? [];
   const contractScore = d.contract_score ?? 0;
@@ -2217,10 +2250,10 @@ function addSignalCard(d, status = '') {
     } catch(e){}
   }
 
-  const isBuy = dir === 'CALL' || dir === 'BUY';
-  const dirLabel = isBuy ? '⬆ BUY (LONG)' : '⬇ SELL (SHORT)';
+  const isCall = dir === 'CALL' || String(sig.direction ?? d.direction ?? '').includes('CALL');
+  const dirLabel = isCall ? '⬆ BUY CALL' : '⬇ BUY PUT';
   const card = document.createElement('div');
-  card.className = 'sig-card sig-' + (isBuy ? 'CALL' : 'PUT') + (status ? ' sig-history' : '');
+  card.className = 'sig-card sig-' + (isCall ? 'CALL' : 'PUT') + (status ? ' sig-history' : '');
   card.dataset.ts = String(signalTimeMs(d));
   card.innerHTML = '<div class="sig-top">' +
       '<div class="sig-dir">' + dirLabel + statusStr + '</div>' +
@@ -2229,14 +2262,20 @@ function addSignalCard(d, status = '') {
     '<div class="sig-option">' + escapeHtml(opt) + '</div>' +
     '<div class="sig-meta">' +
       escapeHtml(symLabel) + ' ' + (Number(spotPrice) > 0 ? Number(spotPrice).toFixed(2) : '—') + ' &nbsp;|&nbsp; ' +
-      'Votes ' + (sig.votes??0) + ' &nbsp;|&nbsp; ' +
+      'Votes ' + (sig.votes??d.votes??0) + ' &nbsp;|&nbsp; ' +
       'Rank ' + Number(rank).toFixed(2) + ' &nbsp;|&nbsp; ' +
       'Conf ' + conf + '% &nbsp;|&nbsp; ' +
       'Budget ' + escapeHtml(budgetLane) +
     '</div>' +
+    '<div class="sig-meta">' +
+      'Setup ' + escapeHtml(setupType) + ' (' + Number(setupStrength).toFixed(2) + ') &nbsp;|&nbsp; ' +
+      'Bias ' + escapeHtml(structureBias) + ' &nbsp;|&nbsp; ' +
+      'Regime ' + escapeHtml(regime) +
+    '</div>' +
+    ((exp !== '—' && exp !== 0) || (sl !== '—' && sl !== 0) || (tgt !== '—' && tgt !== 0) ? (
     '<div class="sig-levels">' +
       '<div class="sig-lvl">' +
-        '<div class="sig-lvl-label">ENTRY</div>' +
+        '<div class="sig-lvl-label">PREMIUM</div>' +
         '<div class="sig-lvl-val">₹' + exp + '</div>' +
       '</div>' +
       '<div class="sig-lvl">' +
@@ -2247,10 +2286,10 @@ function addSignalCard(d, status = '') {
         '<div class="sig-lvl-label">TARGET</div>' +
         '<div class="sig-lvl-val tgt">₹' + tgt + '</div>' +
       '</div>' +
-    '</div>' +
-    '<div class="sig-meta">' + (sig.strategies_fired??[]).join(', ') + '</div>' +
+    '</div>') : '') +
+    '<div class="sig-meta">' + (sig.strategies_fired??d.strategies_fired??[]).join(', ') + '</div>' +
     (rejectionReason ? ('<div class="sig-rationale"><strong>REASON</strong><br>' + escapeHtml(rejectionReason) + '</div>') : '') +
-    '<div class="sig-meta">Contract score ' + Number(contractScore).toFixed(2) + ' | Source ' + (d.premium_source ?? '—') + '</div>' +
+    '<div class="sig-meta">Contract score ' + Number(contractScore).toFixed(2) + ' | Source ' + (d.premium_source ?? '—') + (rr > 0 ? ' | RR 1:' + rr.toFixed(2) : '') + '</div>' +
     (status === 'CLOSED' ? ('<div class="sig-meta" style="color:' + (d.pnl_pct>=0?'var(--green)':'var(--red)') + ';font-weight:700">Result: ' + (d.pnl_pct>=0?'+':'') + d.pnl_pct + '% (' + d.exit_reason + ')</div>') : '') +
     (selectionNotes.length ? ('<div class="sig-rationale">' + selectionNotes.map(escapeHtml).join('<br>') + '</div>') : '') +
     (rat ? ('<div class="sig-rationale">' + rat + '</div>') : '') +
@@ -2358,9 +2397,11 @@ function journalKey(d) {
 
 function addSignalFeedSnapshot(d) {
   if (!d || !(d.signal_id || d.direction || d.lifecycle_status || d.rejection_reason || d.suppression_reason)) return;
-  const key = d.signal_id || `${d.timestamp || ''}|${d.direction || ''}|${d.option_symbol || ''}`;
-  if (hydratedSignalKeys.has(key)) return;
-  hydratedSignalKeys.add(key);
+  const votes = Number(d.votes ?? (d.signal && d.signal.votes) ?? 0);
+  if (votes > 0 && votes < 4) return;
+  const key = getSignalCardKey(d);
+  if (key && hydratedSignalKeys.has(key)) return;
+  if (key) hydratedSignalKeys.add(key);
 
   const feed = document.getElementById('signal-feed');
   const ph = feed.querySelector('.sig-empty');
@@ -2394,12 +2435,13 @@ function addSignalFeedSnapshot(d) {
       <div class="sig-time">${ts}</div>
     </div>
     <div class="sig-option">${escapeHtml(opt)}</div>
-    <div class="sig-meta">${escapeHtml(d.symbol || 'SILVERM')} ${Number(d.underlying_price || d.price || d.nifty_price || 0) > 0 ? Number(d.underlying_price || d.price || d.nifty_price).toFixed(2) : '—'} &nbsp;|&nbsp; Votes ${d.votes ?? 0} &nbsp;|&nbsp; Rank ${rank ? rank.toFixed(2) : '—'} &nbsp;|&nbsp; Conf ${Math.round(conf * 100)}%</div>
-    <div class="sig-meta">Setup ${escapeHtml(d.setup_type || '—')} (${Number(d.setup_strength || 0).toFixed(2)}) &nbsp;|&nbsp; Bias ${escapeHtml(d.structure_bias || '—')} &nbsp;|&nbsp; ${escapeHtml(strategies || '—')}</div>
-    ${entry > 0 ? `<div class="sig-meta">Premium ₹${entry.toFixed(1)} | SL ₹${Number(d.sl_premium || 0).toFixed(1)} | Target ₹${Number(d.target_premium || 0).toFixed(1)}${rr ? ` | RR ${rr.toFixed(2)}` : ''}</div>` : ''}
+    <div class="sig-meta">${escapeHtml(d.symbol || 'SILVERM')} ${Number(d.underlying_price || d.price || d.nifty_price || 0) > 0 ? Number(d.underlying_price || d.price || d.nifty_price).toFixed(2) : '—'} &nbsp;|&nbsp; Votes ${d.votes ?? 0} &nbsp;|&nbsp; Rank ${rank ? rank.toFixed(2) : '—'} &nbsp;|&nbsp; Conf ${Math.round(conf * 100)}% &nbsp;|&nbsp; Budget ${escapeHtml(String(d.budget_lane || 'FULL').toUpperCase())}</div>
+    <div class="sig-meta">Setup ${escapeHtml(d.setup_type || '—')} (${Number(d.setup_strength || 0).toFixed(2)}) &nbsp;|&nbsp; Bias ${escapeHtml(d.structure_bias || '—')} &nbsp;|&nbsp; Regime ${escapeHtml(d.regime || d.market_regime || '—')}</div>
+    ${entry > 0 ? `<div class="sig-meta">${String(opt).toUpperCase().includes('FUT') ? 'Entry' : 'Premium'} ₹${entry.toFixed(1)} | SL ₹${Number(d.sl_premium || d.sl_price || 0).toFixed(1)} | Target ₹${Number(d.target_premium || d.target_price || 0).toFixed(1)}${rr ? ` | RR 1:${rr.toFixed(2)}` : ''}</div>` : ''}
+    <div class="sig-meta">${escapeHtml(strategies || '—')}</div>
     ${d.entry_reason ? `<div class="sig-meta">${escapeHtml(d.entry_reason)}</div>` : ''}
     ${notes.length ? `<div class="sig-rationale">${notes.map(escapeHtml).join('<br>')}</div>` : ''}
-    ${reason ? `<div class="sig-rationale">${escapeHtml(reason)}</div>` : ''}
+    ${reason ? `<div class="sig-rationale"><strong>REASON</strong><br>${escapeHtml(reason)}</div>` : ''}
   `;
   feed.prepend(card);
   sortSignalFeedCards();
@@ -2610,6 +2652,20 @@ function onPositionClosed(d) {
   socket.emit('request_status');
 }
 
+function resetStrategies() {
+  if (typeof socket !== 'undefined' && socket && socket.connected) {
+    socket.emit('reset_strategies');
+  }
+  fetch('/api/strategies/reset', { method: 'POST' })
+    .then(r => r.json())
+    .then(() => {
+      if (typeof socket !== 'undefined' && socket) {
+        socket.emit('request_status');
+      }
+    })
+    .catch(() => {});
+}
+
 // ── ALERTS ───────────────────────────────────────────────────────────────────
 function addAlert(d) {
   const feed = document.getElementById('alert-feed');
@@ -2783,7 +2839,7 @@ function renderJournalSummary(summary) {
     const elStartCap = document.getElementById('j-start-cap');
     if (elStartCap) elStartCap.textContent = '₹200,000.00';
     const elStartSub = document.getElementById('j-start-sub');
-    if (elStartSub) elStartSub.textContent = '₹30,000 active fund';
+    if (elStartSub) elStartSub.textContent = '₹40,000 active fund';
     const elEq = document.getElementById('j-equity');
     if (elEq) elEq.textContent = '₹200,000.00';
     const elEqSub = document.getElementById('j-equity-sub');
@@ -2808,7 +2864,7 @@ function renderJournalSummary(summary) {
     return;
   }
   const startCap = Number(summary.starting_capital !== undefined && summary.starting_capital !== null ? summary.starting_capital : 200000);
-  const activeFund = Number(summary.deployed_capital !== undefined && summary.deployed_capital !== null ? summary.deployed_capital : 30000);
+  const activeFund = Number(summary.deployed_capital !== undefined && summary.deployed_capital !== null ? summary.deployed_capital : 40000);
   const grossPnl = Number(summary.gross_pnl !== undefined && summary.gross_pnl !== null ? summary.gross_pnl : (Number(summary.realized_pnl || 0) + Number(summary.total_charges || summary.charges_taxes || 0)));
   const charges = Number(summary.charges_taxes !== undefined && summary.charges_taxes !== null ? summary.charges_taxes : (summary.total_charges || 0));
   const netPnl = Number(summary.net_pnl !== undefined && summary.net_pnl !== null ? summary.net_pnl : (summary.realized_pnl !== undefined ? summary.realized_pnl : (grossPnl - charges)));
@@ -2946,14 +3002,27 @@ function renderTradeHistory(history) {
     journalState.observe.trades = history.observe.trades || [];
     journalState.observe.summary = history.observe.summary || null;
   }
-  if (history.summary) {
-    const s = history.summary.all || history.summary;
-    if (s && (s.trades || s.gross_pnl || s.realized_pnl || s.net_pnl)) {
-      journalState.live.summary = s;
+  if (journalState.tradingMode !== 'OBSERVE') {
+    if (history.summary && !journalState.live.summary) {
+      const s = history.summary.all || history.summary;
+      if (s && (s.trades || s.gross_pnl || s.realized_pnl || s.net_pnl)) {
+        journalState.live.summary = s;
+      }
     }
-  }
-  if (Array.isArray(history.recent_trades) && history.recent_trades.length) {
-    journalState.live.trades = history.recent_trades;
+    if (Array.isArray(history.recent_trades) && history.recent_trades.length && !journalState.live.trades.length) {
+      journalState.live.trades = history.recent_trades;
+    }
+  } else {
+    // In OBSERVE mode, live trades remain strictly 0! recent_trades belong to observe
+    if (history.summary && !journalState.observe.summary) {
+      const s = history.summary.all || history.summary;
+      if (s && (s.trades || s.gross_pnl || s.realized_pnl || s.net_pnl)) {
+        journalState.observe.summary = s;
+      }
+    }
+    if (Array.isArray(history.recent_trades) && history.recent_trades.length && !journalState.observe.trades.length) {
+      journalState.observe.trades = history.recent_trades;
+    }
   }
   switchJournalTab(journalState.activeTab);
 }

@@ -164,24 +164,43 @@ class LiveShadowOptionTracker:
         direction: str,
         current_ts: datetime,
         option_chain_snapshot: Optional[dict] = None,
+        symbol: Optional[str] = None,
     ) -> dict:
         """
         Reuses production contract selection logic:
-        - ATM strike step = 50
+        - Dynamic strike step and lot size per instrument
         - Direction -> CE / PE
-        - Standard lot size = 65
-        - Nearest weekly expiry
+        - Nearest expiry
         """
-        atm_strike = int(round(underlying_price / 50.0) * 50)
+        sym = str(symbol or os.getenv("INSTRUMENT", "SILVERM")).upper().strip()
+        try:
+            from utils.option_utils import (
+                get_index_lot_size,
+                get_index_strike_step,
+                build_option_symbol,
+                get_weekly_expiry,
+            )
+            strike_step = get_index_strike_step(sym)
+            lot_size = get_index_lot_size(sym)
+            ref_d = current_ts.date() if isinstance(current_ts, datetime) else current_ts
+            expiry_dt = get_weekly_expiry(ref_d, symbol=sym)
+        except Exception:
+            strike_step = 1000 if "SILVER" in sym else 50
+            lot_size = 5 if "SILVER" in sym else 65
+            days_to_thursday = (3 - current_ts.weekday()) % 7
+            if days_to_thursday == 0 and current_ts.hour >= 15:
+                days_to_thursday = 7
+            expiry_dt = (current_ts + timedelta(days=days_to_thursday)).date()
+
+        atm_strike = int(round(underlying_price / float(strike_step)) * strike_step)
         option_type = "CE" if direction == "BUY_CALL" else "PE"
-        
-        # Calculate nearest Thursday expiry
-        days_to_thursday = (3 - current_ts.weekday()) % 7
-        if days_to_thursday == 0 and current_ts.hour >= 15:
-            days_to_thursday = 7
-        expiry_dt = current_ts + timedelta(days=days_to_thursday)
-        expiry_str = expiry_dt.strftime("%Y-%m-%d")
-        contract_symbol = f"NIFTY{expiry_dt.strftime('%y%b%d').upper()}{atm_strike}{option_type}"
+        expiry_str = expiry_dt.strftime("%Y-%m-%d") if hasattr(expiry_dt, "strftime") else str(expiry_dt)
+
+        try:
+            from utils.option_utils import build_option_symbol
+            contract_symbol = build_option_symbol(sym, expiry_dt, atm_strike, option_type)
+        except Exception:
+            contract_symbol = f"{sym}{atm_strike}{option_type}"
 
         # Estimate realistic baseline option premium if snapshot not available
         est_premium = max(round(underlying_price * 0.0055, 1), 50.0)
@@ -189,13 +208,13 @@ class LiveShadowOptionTracker:
         ask = round(est_premium + 0.40, 1)
 
         return {
-            "underlying": "NIFTY",
+            "underlying": sym,
             "direction": direction,
             "option_type": option_type,
             "strike": atm_strike,
             "expiry_date": expiry_str,
             "contract_symbol": contract_symbol,
-            "lot_size": 65,
+            "lot_size": lot_size,
             "ltp": est_premium,
             "bid": bid,
             "ask": ask,
@@ -248,10 +267,12 @@ class LiveShadowOptionTracker:
                     direction = ev["direction"]
                     entry_price = float(ev["shadow_entry_price"] or candle_close)
                     
+                    ev_symbol = str(ev.get("symbol") or ev.get("instrument") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM")))
                     contract_info = self.select_production_contract(
                         underlying_price=entry_price,
                         direction=direction,
                         current_ts=current_ts,
+                        symbol=ev_symbol,
                     )
 
                     # Baseline immediate entry price (what would have been paid at original signal)
@@ -259,6 +280,7 @@ class LiveShadowOptionTracker:
                         underlying_price=float(ev["signal_price"]),
                         direction=direction,
                         current_ts=current_ts - timedelta(minutes=5 * ev["bars_observed"]),
+                        symbol=ev_symbol,
                     )
 
                     shadow_opt_ltp = contract_info["ltp"]
@@ -273,7 +295,7 @@ class LiveShadowOptionTracker:
                     frozen = FrozenOptionContract(
                         signal_id=sig_id,
                         shadow_entry_id=f"SHADOW_{sig_id}",
-                        underlying="NIFTY",
+                        underlying=contract_info["underlying"],
                         direction=direction,
                         option_type=contract_info["option_type"],
                         strike=contract_info["strike"],

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import os
 import threading
 
 import pandas as pd
@@ -30,9 +31,12 @@ _BACKTEST_CACHE_LOCK = threading.Lock()
 
 
 def _cache_symbol(symbol: str | None) -> str:
-    key = str(symbol or "NIFTY").upper().replace(" ", "")
-    if key in {"NIFTY50", "NIFTY_50"}:
-        return "NIFTY"
+    active_sym = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    key = str(symbol or active_sym).upper().replace(" ", "")
+    if key in {"NIFTY50", "NIFTY_50", "NIFTY"}:
+        return active_sym
+    if key in {"SILVERMIC", "SILVER"}:
+        return "SILVERM"
     return key
 
 
@@ -160,7 +164,8 @@ def ensure_backtest_cache(symbols: tuple[str, ...] | None = None) -> dict:
 def _ensure_backtest_cache(symbols: tuple[str, ...] | None = None) -> dict:
     broker_name = get_active_broker_name()
     intervals = ["1minute", "5minute", "day"]
-    symbols = tuple(_cache_symbol(s) for s in (symbols or SUPPORTED_INDEX_SYMBOLS or ("NIFTY",)))
+    default_sym = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    symbols = tuple(_cache_symbol(s) for s in (symbols or (default_sym,)))
     results: dict[str, dict | None] = {}
     for symbol in symbols:
         for interval in intervals:

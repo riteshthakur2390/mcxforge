@@ -147,7 +147,7 @@ class RawSignal:
 class TradePlan:
     """Output of Trade Planner Agent — complete executable plan for futures or contracts."""
     signal:          RawSignal
-    contract_symbol: str   = ""          # e.g. SILVERMIC24NOVFUT
+    contract_symbol: str   = ""          # e.g. SILVERM24NOVFUT
     option_symbol:   str   = ""          # legacy alias for contract_symbol
     strike:          int   = 0           # 0 for futures
     option_type:     str   = ""          # FUT / CE / PE
@@ -232,6 +232,11 @@ class TradePlan:
 
     @property
     def is_long(self) -> bool:
+        opt_sym = str(getattr(self, "option_symbol", "") or "").upper()
+        opt_typ = str(getattr(self, "option_type", "") or "").upper()
+        # Option buyers (both CALL and PUT) are always LONG the option contract
+        if opt_typ in ("CE", "PE") or opt_sym.endswith("-CE") or opt_sym.endswith("-PE") or " CE" in opt_sym or " PE" in opt_sym:
+            return True
         if self.signal:
             return self.signal.direction.is_long
         return True
@@ -357,6 +362,10 @@ class Position:
         if self.plan:
             if hasattr(self.plan, "is_long"):
                 return bool(self.plan.is_long)
+            opt_sym = str(getattr(self.plan, "option_symbol", "") or "").upper()
+            opt_typ = str(getattr(self.plan, "option_type", "") or "").upper()
+            if opt_typ in ("CE", "PE") or opt_sym.endswith("-CE") or opt_sym.endswith("-PE") or " CE" in opt_sym or " PE" in opt_sym:
+                return True
             if hasattr(self.plan, "signal") and self.plan.signal:
                 sig_dir = getattr(self.plan.signal, "direction", None)
                 if sig_dir is not None:

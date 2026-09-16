@@ -36,9 +36,9 @@ except ImportError:
 try:
     from instruments.registry import get_instrument_config
     _cfg = get_instrument_config("SILVERM")
-    COMMODITY_STRIKE_STEP = getattr(_cfg, "strike_step", 500) or 500
+    COMMODITY_STRIKE_STEP = getattr(_cfg, "strike_step", 1000) or 1000
 except Exception:
-    COMMODITY_STRIKE_STEP = 500
+    COMMODITY_STRIKE_STEP = 1000
 
 class StrikeMomentumStrategy:
     """S21: Multi-strike premium momentum — follow where money is flowing."""

@@ -65,15 +65,15 @@ except ImportError:
     ENTRY_MIN_DET_CONF = 0.62
     ADX_TREND_THRESHOLD= 18.0
 
-# ── Session time windows ──────────────────────────────────────────────────────
+# ── Session time windows (MCX Commodity: 09:00 - 23:30 IST) ───────────────────
 SESSION_WINDOWS = [
     # (start, end, label, size_mult, min_conf_override, notes)
-    (dtime(9, 15),  dtime(10,  0), "OPENING_RANGE",  0.0,  0.99, "Block — institutions placing orders"),
-    (dtime(10,  0), dtime(11, 30), "PRIME",          1.0,  0.00, "Best window — full size, normal gates"),
-    (dtime(11, 30), dtime(13,  0), "SECONDARY",      0.85, 0.00, "Good signals — 85% size"),
-    (dtime(13,  0), dtime(14,  0), "WEAK",           0.50, 0.72, "Reduce size 50% — higher conf bar"),
-    (dtime(14,  0), dtime(14, 30), "LAST_CHANCE",    0.25, 0.85, "Only high conv trades — 25% size"),
-    (dtime(14, 30), dtime(15, 30), "CLOSED",         0.0,  0.99, "No new signals"),
+    (dtime(9,  0),  dtime(9,  30), "OPENING_RANGE", 0.0,  0.99, "Opening range build (ORB window)"),
+    (dtime(9, 30),  dtime(13,  0), "MORNING_ACTIVE",1.0,  0.00, "Morning active session — full size, normal gates"),
+    (dtime(13, 0),  dtime(17,  0), "MIDDAY_ACTIVE", 1.0,  0.00, "Midday European session — full size, normal gates"),
+    (dtime(17, 0),  dtime(22, 30), "EVENING_PRIME", 1.0,  0.00, "Evening US session — peak volume, full size"),
+    (dtime(22, 30), dtime(23, 15), "LATE_SESSION",  0.75, 0.70, "Late session — 75% size, higher confidence"),
+    (dtime(23, 15), dtime(23, 30), "EOD_CUTOFF",    0.0,  0.99, "EOD square-off / market close"),
 ]
 
 
@@ -126,14 +126,14 @@ class MorningBiasSystem:
 
     def compute_bias(
         self,
-        gap_pct:        float = 0.0,   # NIFTY open gap vs prev close %
+        gap_pct:        float = 0.0,   # Commodity open gap vs prev close %
         india_vix:      float = 18.0,
         prev_close:     float = 0.0,
         cpr_top:        float = 0.0,   # CPR top (BC)
         cpr_bottom:     float = 0.0,   # CPR bottom (TC)
         fii_net_cr:     float = 0.0,   # FII net in ₹Cr (+ = buying)
         dow_futures_pct:float = 0.0,   # Dow futures change %
-        sgx_nifty_pct:  float = 0.0,   # SGX Nifty change %
+        sgx_nifty_pct:  float = 0.0,   # Global futures change %
     ) -> MorningBias:
         """
         Compute morning directional bias from pre-market data.
@@ -309,27 +309,27 @@ class MorningBiasSystem:
         # ── LOOSEN conditions ─────────────────────────────────────────────────
         if adx > 30 and regime == "TRENDING":
             votes   = max(1, votes - 1)      # only 1 vote needed in strong trend
-            ml_min  = max(0.28, ml_min - 0.08)
+            ml_min  = max(0.32, ml_min - 0.08)
             det_min = max(0.50, det_min - 0.12)
             loosened = True
             reasons.append(f"ADX={adx:.0f}>30+TRENDING")
 
         elif adx > 22 and regime == "TRENDING":
             votes   = max(2, votes)
-            ml_min  = max(0.30, ml_min - 0.06)
+            ml_min  = max(0.32, ml_min - 0.06)
             det_min = max(0.55, det_min - 0.07)
             loosened = True
             reasons.append(f"ADX={adx:.0f}>22")
 
         if bias_strong:
-            ml_min   = max(0.30, ml_min - 0.04)
+            ml_min   = max(0.32, ml_min - 0.04)
             loosened = True
             reasons.append(f"strong_bias={b.bias}")
 
-        if sess.label == "PRIME":
+        if sess.label in ("PRIME", "EVENING_PRIME", "MORNING_ACTIVE", "MIDDAY_ACTIVE"):
             ml_min   = max(0.30, ml_min - 0.02)
             loosened = True
-            reasons.append("PRIME_SESSION")
+            reasons.append(f"{sess.label}")
 
         # ── TIGHTEN conditions ────────────────────────────────────────────────
         if adx < 15 or regime in ("RANGING", "CHOPPY"):
@@ -338,7 +338,7 @@ class MorningBiasSystem:
             det_min = min(0.75, det_min + 0.10)
             reasons.append(f"ADX={adx:.0f}<15/RANGING")
 
-        if sess.label in ("WEAK", "LAST_CHANCE"):
+        if sess.label in ("WEAK", "LAST_CHANCE", "LATE_SESSION"):
             ml_min  = min(0.55, ml_min + 0.06)
             reasons.append(f"{sess.label}")
 

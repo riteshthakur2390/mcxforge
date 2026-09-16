@@ -16,7 +16,7 @@ WHY THIS IS CRITICAL:
   - Single disk failure = months of work lost
 
 DESTINATIONS:
-  1. Local archive: /backups/signalforge_YYYYMMDD.zip (always)
+  1. Local archive: /backups/mcxforge_YYYYMMDD.zip (always)
   2. Google Drive:  if GDRIVE_FOLDER_ID set in .env
   3. AWS S3:        if S3_BUCKET set in .env
 
@@ -26,8 +26,8 @@ SETUP:
   rclone config  (follow prompts to link Google Drive)
   Add to .env: GDRIVE_FOLDER_ID=your_folder_id
 
-  # Cron (22:00 IST daily)
-  0 22 * * * cd /opt/signalforge && python scripts/nightly_backup.py
+  # Cron (01:00 IST daily)
+  0 1 * * * cd /Users/vishranti/Downloads/projects/mcxforge && ./venv/bin/python scripts/nightly_backup.py
 """
 
 import os
@@ -62,7 +62,7 @@ KEEP_LOCAL_N = 7   # keep last 7 local backups
 def create_zip(backup_path: Path) -> Path:
     """Create zip archive of critical data."""
     today    = date.today().strftime("%Y%m%d")
-    zip_name = f"signalforge_{today}.zip"
+    zip_name = f"mcxforge_{today}.zip"
     zip_path = backup_path / zip_name
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -117,8 +117,8 @@ def upload_s3(zip_path: Path) -> bool:
     try:
         import boto3
         s3 = boto3.client("s3")
-        s3.upload_file(str(zip_path), S3_BUCKET, f"signalforge/{zip_path.name}")
-        print(f"  ✅ S3: uploaded to s3://{S3_BUCKET}/signalforge/{zip_path.name}")
+        s3.upload_file(str(zip_path), S3_BUCKET, f"mcxforge/{zip_path.name}")
+        print(f"  ✅ S3: uploaded to s3://{S3_BUCKET}/mcxforge/{zip_path.name}")
         return True
     except Exception as e:
         print(f"  ❌ S3 error: {e}")
@@ -127,8 +127,11 @@ def upload_s3(zip_path: Path) -> bool:
 
 def cleanup_old_backups(backup_dir: Path, keep_n: int = 7) -> None:
     """Remove old local backups keeping only last N."""
-    zips = sorted(backup_dir.glob("signalforge_*.zip"),
-                  key=lambda p: p.stat().st_mtime, reverse=True)
+    zips = sorted(
+        list(backup_dir.glob("mcxforge_*.zip")) + list(backup_dir.glob("signalforge_*.zip")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     for old in zips[keep_n:]:
         old.unlink()
         print(f"  🗑  Removed old backup: {old.name}")

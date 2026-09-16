@@ -62,6 +62,7 @@ CONFIDENCE SCORING:
   Cap: 0.84
 """
 
+import os
 import numpy as np
 import pandas as pd
 from datetime import date, time as dtime
@@ -104,16 +105,15 @@ class ExpiryWeekStrategy:
     def _evaluate(self, df: pd.DataFrame, kwargs: dict) -> dict:
         none = {"direction": Direction.NONE, "confidence": 0.0, "name": self.name}
 
-        # ── Gate 1: Must be an index weekly expiry day ───────────────────────
         last_ts = df.index[-1]
         try:
-            is_nifty_expiry = is_expiry_day(last_ts.date(), "NIFTY")
-            is_sensex_expiry = is_expiry_day(last_ts.date(), "SENSEX")
+            curr_sym = os.getenv("INSTRUMENT", "SILVERM")
+            is_sym_expiry = is_expiry_day(last_ts.date(), curr_sym)
             candle_time = dtime(last_ts.hour, last_ts.minute)
         except Exception:
             return none
 
-        if not (is_nifty_expiry or is_sensex_expiry):
+        if not is_sym_expiry:
             return none
         instrument = get_instrument(trade_date=last_ts.date(), verbose=False)
 
@@ -173,7 +173,10 @@ class ExpiryWeekStrategy:
         iv_proxy    = max(vix / 100, 0.12)
         atm_prem    = spot * iv_proxy * (dte_days / 365) ** 0.5 * 0.4  # simplified ATM formula
 
-        if not (S19_EXPIRY_MIN_PREMIUM <= atm_prem <= S19_EXPIRY_MAX_PREMIUM):
+        # Premium relative check: between 0.1% and 3.0% of spot
+        min_prem = spot * 0.001
+        max_prem = spot * 0.03
+        if not (min_prem <= atm_prem <= max_prem):
             return none
 
         # ── Confidence scoring ────────────────────────────────────────────────
@@ -211,7 +214,7 @@ class ExpiryWeekStrategy:
             "confidence": conf,
             "name":       self.name,
             "meta": {
-                "setup":           "expiry_nifty" if is_nifty_expiry else "expiry_sensex",
+                "setup":           f"expiry_{getattr(instrument, 'symbol', curr_sym).lower()}",
                 "instrument":      instrument.name,
                 "expiry_day":      instrument.expiry_day,
                 "lot_size":        instrument.lot_size,

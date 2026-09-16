@@ -41,7 +41,7 @@ from utils.option_utils import (
     get_nearest_expiry,
 )
 from utils.performance_review import build_live_vs_backtest_report
-from utils.live_trade_history import get_live_trade_history
+from utils.live_trade_history import get_trade_history, get_live_trade_history
 
 IST = pytz.timezone("Asia/Kolkata")
 app      = Flask(__name__)
@@ -111,6 +111,7 @@ class DashboardAlertAgent:
         self._option_ltp_cache: dict[str, tuple[float, float]] = {}
         self._option_ltp_fail_until: float = 0.0
         self._latest_signal_payload: dict = {}
+        self._enriched_rejected_cache: dict[str, dict] = {}
 
     def register(self):
         topics_to_handlers = [
@@ -138,6 +139,9 @@ class DashboardAlertAgent:
 
     async def on_raw_signal(self, msg: Message):
         payload = dict(msg.payload or {})
+        votes = int(payload.get("votes") or 0)
+        if votes < 4:
+            return
         payload.setdefault("lifecycle_status", "RAW")
         payload.setdefault("timestamp", payload.get("timestamp") or datetime.now(IST).isoformat())
         self._latest_signal_payload = payload
@@ -152,17 +156,31 @@ class DashboardAlertAgent:
 
     async def on_rejected(self, msg: Message):
         enriched = self._enrich_rejected_signal(msg.payload)
+        votes = int(enriched.get("votes") or 0)
+        # Signals with < 4 votes are sub-threshold noise; require >= 4 votes for reporting
+        min_report_votes = max(4, int(os.getenv("MIN_REJECTION_REPORT_VOTES", os.getenv("MIN_STRATEGY_VOTES", "4"))))
+        if votes < min_report_votes:
+            return
+
         enriched.setdefault("lifecycle_status", "REJECTED")
         enriched.setdefault("timestamp", enriched.get("timestamp") or datetime.now(IST).isoformat())
         self._latest_signal_payload = enriched
+        
+        # Cache enriched rejected signal and persist to journal so past prices are frozen permanently
+        sig_id = str(enriched.get("signal_id") or "")
+        if sig_id:
+            self._enriched_rejected_cache[sig_id] = dict(enriched)
+        time_key = f"{enriched.get('timestamp')}_{enriched.get('direction')}_{enriched.get('symbol')}"
+        self._enriched_rejected_cache[time_key] = dict(enriched)
+        self._persist_rejected_signal_to_journal(enriched)
+
         socketio.emit("signal_rejected", self._to_json_safe(enriched))
 
-        votes = int(enriched.get("votes") or 0)
-        if votes < 4:
-            return
         try:
             direction = str(enriched.get("direction") or "").replace("_", " ").upper()
-            arrow = "⬇" if "PUT" in direction else "⬆"
+            is_call = "CALL" in direction
+            arrow = "⬆" if is_call else "⬇"
+            dir_display = "BUY CALL" if is_call else "BUY PUT"
             
             try:
                 timestamp = pd.Timestamp(enriched.get("timestamp") or datetime.now(IST))
@@ -174,11 +192,14 @@ class DashboardAlertAgent:
             except Exception:
                 time_str = datetime.now(IST).strftime("%H:%M:%S")
                 
-            opt_symbol = enriched.get("option_symbol") or ""
+            opt_symbol = enriched.get("contract_symbol") or enriched.get("option_symbol") or enriched.get("symbol") or ""
             spot = float(
-                enriched.get("nifty_price")
-                or enriched.get("nifty_ltp")
+                enriched.get("price")
                 or enriched.get("ltp")
+                or enriched.get("spot_price")
+                or enriched.get("underlying_price")
+                or enriched.get("nifty_price")
+                or enriched.get("nifty_ltp")
                 or 0.0
             )
             votes = enriched.get("votes", 0)
@@ -191,9 +212,31 @@ class DashboardAlertAgent:
             )
             conf_pct = int(conf_val * 100) if conf_val <= 1.0 else int(conf_val)
             
-            premium = enriched.get("est_premium") or enriched.get("entry_premium") or 0.0
-            sl = enriched.get("sl_premium") or 0.0
-            target = enriched.get("target_premium") or 0.0
+            premium = float(enriched.get("est_premium") or enriched.get("entry_premium") or enriched.get("entry_price") or 0.0)
+            sl = float(enriched.get("sl_premium") or enriched.get("sl_price") or 0.0)
+            target = float(enriched.get("target_premium") or enriched.get("target_price") or 0.0)
+            
+            rank = float(enriched.get("ml_rank_score") or enriched.get("rank_score") or 0.0)
+            if rank <= 0.0 and conf_pct > 0:
+                rank = round((conf_pct / 100.0) * 0.60 + min(1.0, votes / 6.0) * 0.40, 2)
+
+            setup_type = enriched.get("setup_type") or "—"
+            setup_strength = float(enriched.get("setup_strength") or 0.0)
+            structure_bias = enriched.get("structure_bias") or "—"
+            if not structure_bias or str(structure_bias).strip() in ("—", "-", "", "None"):
+                structure_bias = "BULLISH" if is_call else "BEARISH" or "—"
+            regime = enriched.get("regime") or enriched.get("market_regime") or "—"
+            budget_lane = str(enriched.get("budget_lane") or "FULL").upper()
+            
+            rr = float(enriched.get("risk_reward") or 0.0)
+            if rr <= 0 and abs(premium - sl) > 0:
+                rr = round(abs(target - premium) / abs(premium - sl), 2)
+
+            sym = str(enriched.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+            level_label = "PREMIUM"
+
+            sl_diff_pct = ((sl - premium) / premium * 100.0) if premium > 0 and sl > 0 else 0.0
+            tgt_diff_pct = ((target - premium) / premium * 100.0) if premium > 0 and target > 0 else 0.0
             
             strats_raw = (
                 enriched.get("strategies_fired")
@@ -209,8 +252,8 @@ class DashboardAlertAgent:
                 strats_list = [s.strip() for s in str(strats_raw).replace("|", ",").split(",") if s.strip()]
             strats_str = ", ".join(strats_list)
             
-            contract_score = enriched.get("contract_score") or 0.0
-            source = enriched.get("premium_source") or "LIVE"
+            contract_score = float(enriched.get("contract_score") or 0.0)
+            source = enriched.get("premium_source") or "—"
             rejection_reason = (
                 enriched.get("rejection_reason")
                 or enriched.get("planner_rejection_reason")
@@ -220,29 +263,54 @@ class DashboardAlertAgent:
             )
             
             notes = enriched.get("selection_notes") or []
+            filtered_notes = []
             if isinstance(notes, list):
-                notes_str = "\n".join(notes)
-            else:
-                notes_str = str(notes)
+                for n in notes:
+                    n_str = str(n).strip()
+                    if n_str and n_str != "[]" and n_str != rejection_reason and not n_str.startswith("Rejected:"):
+                        filtered_notes.append(n_str)
+            elif isinstance(notes, str) and notes.strip() and notes.strip() != "[]":
+                filtered_notes.append(notes.strip())
+
+            notes_str = "\n".join(filtered_notes[:3])
                 
-            text = (
-                f"{arrow} {direction} — REJECTED\n"
-                f"{time_str}\n"
-                f"{opt_symbol}\n"
-                f"NIFTY {spot:.2f}  |  Votes {votes}  |  Rank {rank:.2f}  |  Conf {conf_pct}%\n"
-                f"PREMIUM\n"
-                f"₹{premium:.1f}\n"
-                f"STOP LOSS\n"
-                f"₹{sl:.1f}\n"
-                f"TARGET\n"
-                f"₹{target:.1f}\n"
-                f"{strats_str}\n"
-                f"REASON\n"
-                f"{rejection_reason or 'Rejected before trade plan creation'}\n"
-                f"Contract score {contract_score:.2f} | Source {source}\n"
-                f"{notes_str}"
-            )
-            self._telegram(text)
+            msg_parts = [
+                f"{arrow} {dir_display} — REJECTED",
+                f"⏰ {time_str} IST",
+                f"🏷️ {opt_symbol or 'No trade plan'}",
+                f"📊 {sym} {spot:,.2f}  |  Votes {votes}  |  Rank {rank:.2f}  |  Conf {conf_pct}%  |  Budget {budget_lane}",
+                f"🎯 Setup: {setup_type} ({setup_strength:.2f})  |  Bias: {structure_bias}  |  Regime: {regime}",
+            ]
+            if premium > 0:
+                msg_parts.append(f"💵 {level_label}\n₹{premium:,.2f}")
+            if sl > 0:
+                msg_parts.append(f"🛑 STOP LOSS\n₹{sl:,.2f} ({sl_diff_pct:+.1f}%)")
+            if target > 0:
+                msg_parts.append(f"🎯 TARGET\n₹{target:,.2f} ({tgt_diff_pct:+.1f}%)")
+            if rr > 0:
+                msg_parts.append(f"⚖️ Risk-Reward: 1:{rr:.2f}")
+            if strats_str:
+                msg_parts.append(f"⚡ Strategies ({votes}): {strats_str}")
+            msg_parts.append(f"🚫 REASON\n{rejection_reason or 'Rejected before trade plan creation'}")
+            msg_parts.append(f"📋 Contract score {contract_score:.2f} | Source {source}")
+            if notes_str and notes_str.strip():
+                msg_parts.append(f"📝 {notes_str.strip()}")
+                
+            text = "\n".join(msg_parts)
+            notify_rej = os.getenv("TELEGRAM_NOTIFY_REJECTIONS", "true").strip().lower() in ("true", "1", "yes")
+            if notify_rej:
+                now_ts = time.time()
+                last_rej_map = getattr(self, "_last_rejected_telegram_ts", None)
+                if last_rej_map is None:
+                    self._last_rejected_telegram_ts = {}
+                    last_rej_map = self._last_rejected_telegram_ts
+                last_ts = last_rej_map.get(direction, 0.0)
+                rej_cooldown = float(os.getenv("REJECTED_TELEGRAM_COOLDOWN_SEC", "1800"))
+                if now_ts - last_ts >= rej_cooldown:
+                    last_rej_map[direction] = now_ts
+                    self._telegram(text)
+                else:
+                    logger.debug(f"[DashboardAgent] Suppressed duplicate telegram rejection alert for {direction} (cooldown {rej_cooldown}s)")
         except Exception as exc:
             logger.error(f"[DashboardAgent] Error sending telegram notification for rejected signal: {exc}", exc_info=True)
 
@@ -250,25 +318,38 @@ class DashboardAlertAgent:
         socketio.emit("signal_suppressed", self._to_json_safe(msg.payload))
 
     def _live_option_ltp(self, option_symbol: str) -> float:
-        if not option_symbol or not self.data_agent:
+        if not option_symbol:
             return 0.0
         now = time.time()
         cached = self._option_ltp_cache.get(option_symbol)
         if cached and cached[1] > now:
             return float(cached[0])
-        if self._option_ltp_fail_until > now and cached:
+        if self._option_ltp_fail_until > now and cached and cached[0] > 0:
             return float(cached[0])
-        getter = getattr(self.data_agent, "get_option_ltp", None)
+        
+        getter = getattr(self.data_agent, "get_option_ltp", None) if self.data_agent else None
         if not callable(getter):
-            return 0.0
+            try:
+                from broker.factory import get_broker
+                broker = get_broker()
+                getter = getattr(broker, "get_option_ltp", None)
+            except Exception:
+                getter = None
+
+        if not callable(getter):
+            return float(cached[0]) if cached and cached[0] > 0 else 0.0
         try:
             ltp = float(getter(option_symbol) or 0.0)
             if ltp > 0:
-                self._option_ltp_cache[option_symbol] = (ltp, now + 5.0)
+                self._option_ltp_cache[option_symbol] = (ltp, now + 30.0)
                 return ltp
+            if cached and cached[0] > 0:
+                return float(cached[0])
             return 0.0
         except Exception as exc:
             self._option_ltp_fail_until = now + 15.0
+            if cached and cached[0] > 0:
+                return float(cached[0])
             logger.debug(
                 f"[DashboardAgent] Live option LTP lookup failed | "
                 f"symbol={option_symbol} error={exc}"
@@ -278,39 +359,18 @@ class DashboardAlertAgent:
     def _enrich_rejected_signal(self, payload: dict) -> dict:
         enriched = dict(payload or {})
         spot = float(
-            enriched.get("nifty_price")
-            or enriched.get("nifty_ltp")
+            enriched.get("price")
             or enriched.get("ltp")
+            or enriched.get("spot_price")
+            or enriched.get("underlying_price")
+            or enriched.get("nifty_price")
+            or enriched.get("nifty_ltp")
             or 0.0
         )
         if spot <= 0:
             return enriched
 
         direction = str(enriched.get("direction") or "").upper()
-        sym = str(enriched.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERMIC"))).upper().strip()
-        is_commodity = sym in ("SILVERMIC", "SILVER", "SILVERM", "GOLD", "GOLDM", "CRUDEOIL", "CRUDEOILM", "NATURALGAS")
-        if is_commodity:
-            try:
-                from utils.instrument_selector import get_instrument_config
-                cfg = get_instrument_config(sym)
-                contract_symbol = str(enriched.get("contract_symbol") or enriched.get("option_symbol") or "") or cfg.get_active_contract()
-                enriched["contract_symbol"] = contract_symbol
-                enriched["symbol"] = sym
-                enriched["entry_price"] = spot
-                if not enriched.get("sl_price"):
-                    is_long = "BUY" in direction or "CALL" in direction
-                    atr = float(enriched.get("atr") or (spot * 0.006))
-                    enriched["sl_price"] = round(spot - (1.5 * atr) if is_long else spot + (1.5 * atr), 2)
-                    enriched["target_price"] = round(spot + (3.0 * atr) if is_long else spot - (3.0 * atr), 2)
-                enriched.setdefault("option_symbol", contract_symbol)
-                enriched.setdefault("entry_premium", spot)
-                enriched.setdefault("est_premium", spot)
-                enriched.setdefault("sl_premium", enriched.get("sl_price", spot))
-                enriched.setdefault("target_premium", enriched.get("target_price", spot))
-                return enriched
-            except Exception as e:
-                logger.debug(f"[DashboardAgent] Commodity futures enrichment error: {e}")
-
         option_type = "CE" if "CALL" in direction else "PE"
         try:
             timestamp = pd.Timestamp(enriched.get("timestamp") or datetime.now(IST))
@@ -318,38 +378,85 @@ class DashboardAlertAgent:
                 timestamp = timestamp.tz_localize(IST)
             else:
                 timestamp = timestamp.tz_convert(IST)
+            sym = str(enriched.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper().strip()
             expiry, dte = get_nearest_expiry(
                 min_days=0,
                 reference_date=timestamp.date(),
-                symbol="NIFTY",
+                symbol=sym,
             )
-            strike = get_atm_strike(spot)
+            strike = get_atm_strike(spot, symbol=sym)
             option_symbol = str(enriched.get("option_symbol") or "") or build_option_symbol(
-                "NIFTY", expiry, strike, option_type
+                sym, expiry, strike, option_type
             )
             live_premium_raw = self._live_option_ltp(option_symbol)
             live_premium = live_premium_raw if live_premium_raw >= 1.0 else 0.0
             premium = (
                 round(live_premium, 1)
                 if live_premium > 0
-                else estimate_atm_premium(spot, max(dte, 1))
+                else estimate_atm_premium(spot, max(dte, 1), symbol=sym)
             )
+            if live_premium > 0:
+                self._option_ltp_cache[option_symbol] = (live_premium, time.time() + 60.0)
             premium_source = "LIVE" if live_premium > 0 else "ESTIMATED_REJECTED"
-            rank = float(enriched.get("ml_rank_score") or 0.0)
             confidence = float(
                 enriched.get("ml_confidence")
                 or enriched.get("confidence")
                 or 0.0
             )
+            votes_cnt = int(enriched.get("votes") or 0)
+            rank = float(enriched.get("ml_rank_score") or 0.0)
+            if rank <= 0.0 and confidence > 0.0:
+                rank = round(confidence * 0.60 + min(1.0, votes_cnt / 6.0) * 0.40, 2)
+                enriched["ml_rank_score"] = rank
 
-            if not enriched.get("option_symbol"):
-                enriched["option_symbol"] = option_symbol
+            enriched["option_symbol"] = option_symbol
+            enriched["contract_symbol"] = option_symbol
             if float(enriched.get("est_premium") or 0.0) < 1.0:
                 enriched["est_premium"] = premium
             if float(enriched.get("entry_premium") or 0.0) < 1.0:
                 enriched["entry_premium"] = premium
+            enriched["entry_price"] = float(enriched.get("entry_premium") or premium)
             if float(enriched.get("sl_premium") or 0.0) < 1.0:
                 enriched["sl_premium"] = round(max(1.0, premium * 0.75), 1)
+            enriched["sl_price"] = enriched["sl_premium"]
+            if float(enriched.get("target_premium") or 0.0) < 1.0:
+                enriched["target_premium"] = round(premium * 1.50, 1)
+            enriched["target_price"] = enriched["target_premium"]
+
+            setup = (((enriched.get("metadata") or {}).get("_context") or {}).get("setup") or {})
+            market_structure = (
+                ((enriched.get("metadata") or {}).get("_context") or {}).get("market_structure")
+                or setup.get("context", {}).get("market_structure")
+                or {}
+            )
+            enriched.setdefault("setup_type", setup.get("setup_type") or enriched.get("source") or "—")
+            enriched.setdefault("setup_strength", float(setup.get("setup_strength", 0.0) or 0.0))
+
+            bias_val = (
+                enriched.get("structure_bias")
+                or setup.get("structure_bias")
+                or market_structure.get("bias")
+                or market_structure.get("structure_state", {}).get("bias")
+                or enriched.get("bias")
+            )
+            if not bias_val or str(bias_val).strip() in ("—", "-", "", "None"):
+                reg_name = str(enriched.get("regime") or enriched.get("market_regime") or setup.get("regime") or "").upper()
+                if "TREND" in reg_name:
+                    bias_val = "BULLISH" if "CALL" in direction else "BEARISH"
+                elif "RANGE" in reg_name:
+                    bias_val = "RANGING"
+                else:
+                    bias_val = "BULLISH" if "CALL" in direction else "BEARISH"
+            enriched["structure_bias"] = bias_val
+            enriched.setdefault("regime", enriched.get("market_regime") or setup.get("regime") or "—")
+            enriched.setdefault("budget_lane", str(enriched.get("trade_size_lane") or (((enriched.get("metadata") or {}).get("reduced_budget_lane")) and "REDUCED") or "FULL").upper())
+            prem_val = float(enriched.get("entry_premium") or premium)
+            sl_val = float(enriched.get("sl_premium") or 0.0)
+            tgt_val = float(enriched.get("target_premium") or 0.0)
+            risk = abs(prem_val - sl_val)
+            reward = abs(tgt_val - prem_val)
+            if risk > 0 and not enriched.get("risk_reward"):
+                enriched["risk_reward"] = round(reward / risk, 2)
             if float(enriched.get("target_premium") or 0.0) < 1.0:
                 enriched["target_premium"] = round(premium * 1.50, 1)
             if float(enriched.get("contract_score") or 0.0) <= 0:
@@ -375,18 +482,16 @@ class DashboardAlertAgent:
             elif not isinstance(existing_notes, list):
                 existing_notes = [str(existing_notes)] if existing_notes else []
             merged_notes = []
-            if reason:
-                merged_notes.append(f"Rejected: {reason}")
-            merged_notes.extend(str(note) for note in existing_notes if str(note).strip())
+            for note in existing_notes:
+                n_str = str(note).strip()
+                if n_str and n_str != "[]" and not n_str.startswith("Rejected:") and n_str != reason:
+                    merged_notes.append(n_str)
             merged_notes.append(context_note)
             deduped_notes = []
             for note in merged_notes:
                 if note not in deduped_notes:
                     deduped_notes.append(note)
-            if live_premium > 0 or not enriched.get("selection_notes"):
-                enriched["selection_notes"] = deduped_notes
-            elif reason:
-                enriched["selection_notes"] = deduped_notes
+            enriched["selection_notes"] = deduped_notes
             if not enriched.get("entry_reason") and reason:
                 enriched["entry_reason"] = f"Rejected: {reason}"
         except Exception as exc:
@@ -398,8 +503,10 @@ class DashboardAlertAgent:
         p   = msg.payload
         sig = p.get("signal", {})
         direction = sig.get("direction", p.get("direction", "BUY"))
-        is_buy = "BUY" in str(direction).upper() or "CALL" in str(direction).upper()
-        arrow = "🟢 ▲" if is_buy else "🔴 ▼"
+        is_call = "CALL" in str(direction).upper()
+        arrow = "🟢 ▲" if is_call else "🔴 ▼"
+        dir_display = "BUY CALL" if is_call else "BUY PUT"
+
         budget_lane = (
             "REDUCED"
             if bool((p.get("metadata") or {}).get("reduced_budget_lane", p.get("reduced_budget_lane", False)))
@@ -409,7 +516,7 @@ class DashboardAlertAgent:
         )
         lots = p.get("lots", 1) or 1
         qty = p.get("quantity", 1) or 1
-        contract = p.get("contract_symbol") or p.get("option_symbol") or p.get("symbol") or "FUT"
+        contract = p.get("contract_symbol") or p.get("option_symbol") or p.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))
         entry_val = float(p.get("entry_price") or p.get("est_premium", 0.0) or 0.0)
         sl_val = float(p.get("sl_price") or p.get("sl_premium", 0.0) or 0.0)
         tgt_val = float(p.get("target_price") or p.get("target_premium", 0.0) or 0.0)
@@ -420,12 +527,28 @@ class DashboardAlertAgent:
         # In LIVE/PAPER mode, actual executed orders are notified on ORDER_PLACED by AnalyticsAgent.
         # Only notify TRADE_PLAN_READY to Telegram if running in pure OBSERVE mode (where orders are not placed).
         if self._get_trading_mode() == "OBSERVE":
+            setup_ctx = (p.get("metadata") or {}).get("_context", {}).get("setup", {}) or (sig.get("metadata") or {}).get("_context", {}).get("setup", {}) or {}
+            setup_type = p.get("setup_type") or sig.get("setup_type") or setup_ctx.get("setup_type") or "—"
+            setup_strength = float(p.get("setup_strength") or sig.get("setup_strength") or setup_ctx.get("setup_strength") or 0.0)
+            structure_bias = p.get("structure_bias") or sig.get("structure_bias") or setup_ctx.get("structure_bias") or "—"
+            regime = p.get("regime") or sig.get("regime") or p.get("market_regime") or "—"
+            strats_list = p.get("strategies_fired") or sig.get("strategies_fired") or []
+            if isinstance(strats_list, list):
+                strats_str = ", ".join(strats_list)
+            else:
+                strats_str = str(strats_list)
+            rr = float(p.get("risk_reward") or sig.get("risk_reward") or 0.0)
+            if rr <= 0 and abs(entry_val - sl_val) > 0:
+                rr = round(abs(tgt_val - entry_val) / abs(entry_val - sl_val), 2)
+
             self._telegram(
-                f"{arrow} *{direction}*\n"
-                f"Budget: *{budget_lane}* ({lots} Lot{'s' if lots > 1 else ''} / {qty} Qty | ₹{invested:,.0f})\n"
-                f"Contract: `{contract}`\n"
-                f"Entry: ~₹{entry_val:.1f} | SL: ₹{sl_val:.1f} | Tgt: ₹{tgt_val:.1f}\n"
-                f"ML: {conf}% | Rank: {rank:.2f} | Votes: {sig.get('votes', 0)}"
+                f"{arrow} *{dir_display} — PLAN READY*\n"
+                f"⏰ {datetime.now(IST).strftime('%H:%M:%S')} IST\n"
+                f"🏷️ Contract: `{contract}`\n"
+                f"📊 Budget: *{budget_lane}* ({lots} Lot{'s' if lots > 1 else ''} / {qty} Qty | ₹{invested:,.0f})\n"
+                f"🎯 Setup: {setup_type} ({setup_strength:.2f})  |  Bias: {structure_bias}  |  Regime: {regime}\n"
+                f"💵 Entry: ~₹{entry_val:,.1f} | SL: ₹{sl_val:,.1f} | Tgt: ₹{tgt_val:,.1f}" + (f" | RR: 1:{rr:.2f}" if rr > 0 else "") + "\n"
+                f"⚡ ML: {conf}% | Rank: {rank:.2f} | Votes ({sig.get('votes', len(strats_list))}): {strats_str}"
             )
 
     async def on_order_event(self, msg: Message):
@@ -449,7 +572,9 @@ class DashboardAlertAgent:
         socketio.emit("trade_history_row", self._to_json_safe(msg.payload))
 
     async def on_eod(self, msg: Message):
+        self._reset_daily_strategy_status(status="EOD_CLOSED")
         socketio.emit("eod_report", self._to_json_safe(msg.payload))
+        socketio.emit("status_update", self._to_json_safe(self._status_payload()))
 
     async def on_alert(self, msg: Message):
         text = msg.payload.get("text", "")
@@ -472,7 +597,7 @@ class DashboardAlertAgent:
             "ltp_update",
             self._to_json_safe({
                 "ltp": msg.payload.get("ltp", 0),
-                "vix": msg.payload.get("vix", 0),
+                "vix": 0.0,
                 "ltps": msg.payload.get("ltps", {}),
                 "timestamp": msg.payload.get("timestamp", ""),
                 "server_timestamp": msg.payload.get("server_timestamp", ""),
@@ -534,21 +659,15 @@ class DashboardAlertAgent:
             "traded": max(int(stats.get("traded", 0) or 0), int(persisted_stats.get("traded", 0) or 0)),
             "wins": max(int(stats.get("wins", 0) or 0), int(persisted_stats.get("wins", 0) or 0)),
             "losses": max(int(stats.get("losses", 0) or 0), int(persisted_stats.get("losses", 0) or 0)),
-            "total_pnl_pct": (
-                stats.get("total_pnl_pct", 0)
-                if abs(float(stats.get("total_pnl_pct", 0) or 0)) >= abs(float(persisted_stats.get("total_pnl_pct", 0) or 0))
-                else persisted_stats.get("total_pnl_pct", 0)
-            ),
-            "realized_pnl": (
-                stats.get("realized_pnl", 0)
-                if abs(float(stats.get("realized_pnl", 0) or 0)) >= abs(float(persisted_stats.get("realized_pnl", 0) or 0))
-                else persisted_stats.get("realized_pnl", 0)
-            ),
+            "total_pnl_pct": persisted_stats.get("total_pnl_pct", 0),
+            "realized_pnl": persisted_stats.get("realized_pnl", 0),
+            "closed": persisted_stats.get("closed", persisted_stats.get("traded", 0)),
         }
         if int(today_history.get("trades", 0) or 0) > 0:
             stats = {
                 **stats,
-                "traded": max(int(stats.get("traded", 0) or 0), int(today_history.get("trades", 0) or 0)),
+                "traded": int(today_history.get("trades", 0) or 0),
+                "closed": int(today_history.get("trades", 0) or 0),
                 "wins": int(today_history.get("wins", stats.get("wins", 0)) or 0),
                 "losses": int(today_history.get("losses", stats.get("losses", 0)) or 0),
                 "total_pnl_pct": float(today_history.get("total_pnl_pct", stats.get("total_pnl_pct", 0)) or 0),
@@ -562,17 +681,29 @@ class DashboardAlertAgent:
         journal_trades = []
         equity_curve_data = {}
         try:
-            from utils.equity_curve import get_equity_curve
-            from utils.live_trade_history import get_live_trade_history
-            eq = get_equity_curve()
+            from utils.equity_curve import get_equity_curve, get_observe_equity_curve
+            from utils.live_trade_history import get_trade_history
+            mode = self._get_trading_mode().upper()
+            eq = get_observe_equity_curve() if mode == "OBSERVE" else get_equity_curve()
             journal_summary = eq.get_summary()
-            journal_trades = get_live_trade_history().rows()
+            journal_trades = get_trade_history().rows()
             equity_curve_data = eq.get_equity_curve_data()
         except Exception:
             pass
 
+        ltps = {}
+        ltp = 0.0
+        if self.data_agent and hasattr(self.data_agent, "get_latest_ltps"):
+            try:
+                ltps = self.data_agent.get_latest_ltps()
+                ltp = self.data_agent.get_ltp()
+            except Exception:
+                pass
+
         return {
             **stats,
+            "ltp": ltp,
+            "ltps": ltps,
             "position": pos,
             "mode": self._get_trading_mode(),
             "risk": risk,
@@ -600,7 +731,7 @@ class DashboardAlertAgent:
 
     def _all_trade_rows(self, limit: int = 200) -> list[dict]:
         try:
-            return get_live_trade_history().rows(limit=limit)
+            return get_trade_history().rows(limit=limit)
         except Exception as exc:
             logger.debug(f"[{self.NAME}] All trade history load failed: {exc}")
             return []
@@ -748,9 +879,9 @@ class DashboardAlertAgent:
         today = _today_iso()
         month = today[:7]
         buckets = {
-            "today": {"trades": 0, "wins": 0, "losses": 0, "total_pnl_pct": 0.0, "realized_pnl": 0.0},
-            "month": {"trades": 0, "wins": 0, "losses": 0, "total_pnl_pct": 0.0, "realized_pnl": 0.0},
-            "all": {"trades": 0, "wins": 0, "losses": 0, "total_pnl_pct": 0.0, "realized_pnl": 0.0},
+            "today": {"trades": 0, "wins": 0, "losses": 0, "total_pnl_pct": 0.0, "realized_pnl": 0.0, "gross_pnl": 0.0, "total_charges": 0.0, "net_pnl": 0.0},
+            "month": {"trades": 0, "wins": 0, "losses": 0, "total_pnl_pct": 0.0, "realized_pnl": 0.0, "gross_pnl": 0.0, "total_charges": 0.0, "net_pnl": 0.0},
+            "all": {"trades": 0, "wins": 0, "losses": 0, "total_pnl_pct": 0.0, "realized_pnl": 0.0, "gross_pnl": 0.0, "total_charges": 0.0, "net_pnl": 0.0},
         }
         seen: set[str] = set()
         for raw in rows or []:
@@ -767,7 +898,11 @@ class DashboardAlertAgent:
                 seen.add(key)
             trade_date = str(row.get("date") or row.get("trade_date") or row.get("entry_time") or "")[:10]
             pnl_pct = self._safe_float(row.get("pnl_pct"))
-            realized = self._safe_float(row.get("realized_pnl"))
+            realized = self._safe_float(row.get("net_pnl_inr", row.get("realized_pnl")))
+            gross = self._safe_float(row.get("gross_pnl_inr"))
+            charges = self._safe_float(row.get("total_charges"))
+            if gross == 0.0 and realized != 0.0 and charges > 0.0:
+                gross = realized + charges
             outcome = str(row.get("outcome_eod") or "").upper()
 
             names = ["all"]
@@ -781,14 +916,20 @@ class DashboardAlertAgent:
                 bucket["trades"] += 1
                 bucket["total_pnl_pct"] += pnl_pct
                 bucket["realized_pnl"] += realized
-                if outcome == "WIN" or pnl_pct > 0:
+                bucket["net_pnl"] += realized
+                bucket["gross_pnl"] += gross
+                bucket["total_charges"] += charges
+                if outcome == "WIN" or pnl_pct > 0 or realized > 0:
                     bucket["wins"] += 1
-                elif outcome == "LOSS" or pnl_pct < 0:
+                elif outcome == "LOSS" or pnl_pct < 0 or realized < 0:
                     bucket["losses"] += 1
 
         for bucket in buckets.values():
             bucket["total_pnl_pct"] = round(bucket["total_pnl_pct"], 2)
             bucket["realized_pnl"] = round(bucket["realized_pnl"], 2)
+            bucket["net_pnl"] = round(bucket["net_pnl"], 2)
+            bucket["gross_pnl"] = round(bucket["gross_pnl"], 2)
+            bucket["total_charges"] = round(bucket["total_charges"], 2)
         return buckets
 
     def _persisted_daily_stats(self) -> dict:
@@ -835,22 +976,25 @@ class DashboardAlertAgent:
             seen_trades.add(trade_key)
             traded += 1
 
-            if status == "CLOSED":
-                pnl_pct = self._safe_float(row.get("pnl_pct"))
-                realized = self._safe_float(row.get("realized_pnl"))
-                total_pnl_pct += pnl_pct
-                realized_pnl += realized
-                outcome = str(row.get("outcome_eod", "") or "").upper()
-                if outcome == "WIN" or pnl_pct > 0:
-                    wins += 1
-                elif outcome == "LOSS" or pnl_pct < 0:
-                    losses += 1
+        # Reconcile trade metrics directly from canonical trade history
+        try:
+            from utils.live_trade_history import get_trade_history
+            hist_today = get_trade_history().summary().get("today", {})
+            if int(hist_today.get("trades", 0) or 0) > 0:
+                traded = int(hist_today.get("trades", 0))
+                wins = int(hist_today.get("wins", 0))
+                losses = int(hist_today.get("losses", 0))
+                total_pnl_pct = float(hist_today.get("total_pnl_pct", 0.0))
+                realized_pnl = float(hist_today.get("realized_pnl", 0.0))
+        except Exception:
+            pass
 
         return {
-            "signals": signals,
+            "signals": max(signals, approved + suppressed),
             "approved": approved,
             "suppressed": suppressed,
             "traded": traded,
+            "closed": traded,
             "wins": wins,
             "losses": losses,
             "total_pnl_pct": round(total_pnl_pct, 2),
@@ -951,17 +1095,33 @@ class DashboardAlertAgent:
 
     def _live_trade_history_payload(self, rows: list[dict] | None = None) -> dict:
         try:
-            from utils.live_trade_history import get_live_trade_history
-            hist = get_live_trade_history()
+            from utils.live_trade_history import get_live_trade_history, get_observe_trade_history
+            from utils.equity_curve import get_live_equity_curve, get_observe_equity_curve
+            current_mode = str(os.getenv("TRADING_MODE", "OBSERVE")).strip().upper()
+            live_hist = get_live_trade_history()
+            live_eq = get_live_equity_curve()
+            obs_hist = get_observe_trade_history()
+            obs_eq = get_observe_equity_curve()
             return {
-                "summary": hist.summary(),
-                "recent_trades": hist.rows(limit=50),
+                "trading_mode": current_mode,
+                "live": {
+                    "trades": live_hist.rows(limit=50),
+                    "summary": live_eq.get_summary(),
+                },
+                "observe": {
+                    "trades": obs_hist.rows(limit=50),
+                    "summary": obs_eq.get_summary(),
+                },
+                "summary": obs_hist.summary() if current_mode == "OBSERVE" else live_hist.summary(),
+                "recent_trades": obs_hist.rows(limit=50) if current_mode == "OBSERVE" else live_hist.rows(limit=50),
             }
         except Exception as exc:
             logger.debug(f"[{self.NAME}] Live trade history unavailable: {exc}")
             return {
                 "summary": {"today": {}, "month": {}, "all": {}},
                 "recent_trades": [],
+                "live": {"trades": [], "summary": {}},
+                "observe": {"trades": [], "summary": {}},
             }
 
     @staticmethod
@@ -991,6 +1151,10 @@ class DashboardAlertAgent:
                         if row.get("signal_id") == "signal_id":
                             continue
                         if not row.get("direction") and not row.get("signal_id"):
+                            continue
+                        # HARD FILTER: Only display signals with at least 4 votes
+                        row_votes = int(float(row.get("votes") or 0))
+                        if row_votes < 4:
                             continue
                         rows.append(self._normalize_signal_feed_row(row))
                     except Exception as row_exc:
@@ -1055,6 +1219,8 @@ class DashboardAlertAgent:
         payload = dict(self._latest_signal_payload or {})
         if not payload:
             return {}
+        if int(payload.get("votes") or 0) < 4:
+            return {}
         ts_value = payload.get("timestamp") or payload.get("entry_time") or datetime.now(IST).isoformat()
         try:
             ts = pd.Timestamp(ts_value)
@@ -1082,7 +1248,7 @@ class DashboardAlertAgent:
             "time": time_value,
             "entry_time": timestamp,
             "timestamp": timestamp,
-            "symbol": payload.get("symbol", "NIFTY"),
+            "symbol": payload.get("symbol") or os.getenv("INSTRUMENT", "SILVERM"),
             "direction": getattr(payload.get("direction"), "value", payload.get("direction", "")),
             "nifty_price": payload.get("nifty_price") or payload.get("nifty_ltp") or payload.get("ltp") or 0,
             "strategies_fired": strategy_combo,
@@ -1124,7 +1290,7 @@ class DashboardAlertAgent:
             "timestamp": row.get("entry_time") or f"{row.get('date', '')}T{row.get('time', '00:00')}:00+05:30",
             "entry_time": row.get("entry_time") or f"{row.get('date', '')}T{row.get('time', '00:00')}:00+05:30",
             "time": row.get("time", ""),
-            "symbol": row.get("symbol", "NIFTY"),
+            "symbol": row.get("symbol") or os.getenv("INSTRUMENT", "SILVERM"),
             "direction": row.get("direction", ""),
             "nifty_price": _num("nifty_price"),
             "strategies_fired": strategies,
@@ -1185,8 +1351,83 @@ class DashboardAlertAgent:
         }
         self._reconcile_trade_pnl_fields(normalized)
         if normalized.get("rejection_reason") or str(normalized.get("lifecycle_status")).upper() == "REJECTED":
-            normalized = self._enrich_rejected_signal(normalized)
+            sig_id = str(normalized.get("signal_id") or "")
+            time_key = f"{normalized.get('timestamp')}_{normalized.get('direction')}_{normalized.get('symbol')}"
+            cached_item = self._enriched_rejected_cache.get(sig_id) or self._enriched_rejected_cache.get(time_key)
+            if cached_item:
+                for k, v in cached_item.items():
+                    if v not in (None, "", "—", 0, 0.0) or k not in normalized or normalized[k] in (None, "", "—", 0, 0.0):
+                        normalized[k] = v
+            elif float(normalized.get("entry_premium") or normalized.get("actual_premium") or normalized.get("est_premium") or 0.0) >= 1.0 and normalized.get("option_symbol"):
+                # Frozen historical value preserved in journal — do NOT re-query live market!
+                pass
+            else:
+                normalized = self._enrich_rejected_signal(normalized)
+                if sig_id:
+                    self._enriched_rejected_cache[sig_id] = dict(normalized)
+                self._enriched_rejected_cache[time_key] = dict(normalized)
+                self._persist_rejected_signal_to_journal(normalized)
         return normalized
+
+    def _persist_rejected_signal_to_journal(self, enriched: dict) -> None:
+        try:
+            sig_id = str(enriched.get("signal_id") or "")
+            ts_str = str(enriched.get("timestamp") or enriched.get("entry_time") or "")
+            opt_sym = str(enriched.get("option_symbol") or enriched.get("contract_symbol") or "")
+            prem = float(enriched.get("entry_premium") or enriched.get("est_premium") or 0.0)
+            if not opt_sym or prem <= 0:
+                return
+
+            date_str = _today_iso()
+            if "T" in ts_str:
+                date_str = ts_str.split("T")[0]
+            csv_path = Path(JOURNAL_DIR) / f"signals_{date_str}.csv"
+            if not csv_path.exists():
+                return
+
+            with open(csv_path, newline="", errors="replace") as f:
+                rows = list(csv.DictReader(f))
+                if not rows:
+                    return
+                fieldnames = list(rows[0].keys())
+
+            updated = False
+            for row in rows:
+                row_sig = str(row.get("signal_id") or "")
+                row_ts = str(row.get("entry_time") or row.get("timestamp") or "")
+                match = False
+                if sig_id and row_sig and sig_id == row_sig:
+                    match = True
+                elif ts_str and row_ts and ts_str[:16] == row_ts[:16] and row.get("direction") == enriched.get("direction"):
+                    match = True
+
+                if match:
+                    def _set_col(col, val):
+                        if col in fieldnames and val is not None:
+                            row[col] = str(val)
+
+                    _set_col("option_symbol", opt_sym)
+                    _set_col("est_premium", enriched.get("est_premium") or prem)
+                    _set_col("actual_premium", enriched.get("actual_premium") or prem)
+                    _set_col("sl_premium", enriched.get("sl_premium") or round(prem * 0.75, 1))
+                    _set_col("target_premium", enriched.get("target_premium") or round(prem * 1.50, 1))
+                    _set_col("premium_source", enriched.get("premium_source") or "LIVE")
+                    if enriched.get("risk_reward"):
+                        _set_col("risk_reward", enriched.get("risk_reward"))
+                    if enriched.get("structure_bias"):
+                        _set_col("structure_bias", enriched.get("structure_bias"))
+                    if enriched.get("ml_rank_score"):
+                        _set_col("ml_rank_score", enriched.get("ml_rank_score"))
+                    updated = True
+                    break
+
+            if updated:
+                with open(csv_path, "w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+        except Exception as exc:
+            logger.debug(f"[DashboardAgent] Could not persist rejected signal to journal: {exc}")
 
     def _pipeline_status(self, stats: dict) -> dict:
         bus_stats = self.bus.get_stats().get("by_topic", {})
@@ -1198,7 +1439,7 @@ class DashboardAlertAgent:
             "rejected": int(bus_stats.get(Topic.SIGNAL_REJECTED, 0)),
             "planned": int(bus_stats.get(Topic.TRADE_PLAN_READY, 0)),
             "orders": int(bus_stats.get(Topic.ORDER_PLACED, 0)) + int(bus_stats.get(Topic.ORDER_DRY_RUN, 0)),
-            "closed": int(stats.get("wins", 0) or 0) + int(stats.get("losses", 0) or 0),
+            "closed": int(stats.get("closed", stats.get("traded", 0)) or (int(stats.get("wins", 0) or 0) + int(stats.get("losses", 0) or 0))),
             "suppressed": int(stats.get("suppressed", bus_stats.get(Topic.SIGNAL_SUPPRESSED, 0)) or 0),
         }
 
@@ -1206,58 +1447,49 @@ class DashboardAlertAgent:
         if self.strategy_agent and hasattr(self.strategy_agent, "strategy_names"):
             try:
                 names = self.strategy_agent.strategy_names()
-                if names and len(names) >= 43:
+                if names:
                     return list(names)
             except Exception:
                 pass
 
         try:
             from core.strategies.ensemble import build_default_strategy_suite
-            suite = build_default_strategy_suite()
-            # Prune removed/toxic models and duplicate alias to reflect exact 43 active strategies
-            excluded = {"Ichimoku", "SqueezeMomentum", "GoldSilverPairs", "SMC_OrderBlocks"}
-            suite_names = [s.name for s in suite if s.name not in excluded]
-            if len(suite_names) == 43:
-                return suite_names
+            return [s.name for s in build_default_strategy_suite()]
         except Exception:
             pass
 
+        from instruments.registry import ALL_COMMODITY_FUTURES_STRATEGIES
+        return list(ALL_COMMODITY_FUTURES_STRATEGIES)
+
+    def _reset_daily_strategy_status(self, status: str = "ACTIVE") -> None:
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+        if self.strategy_agent and hasattr(self.strategy_agent, "reset_daily_health"):
+            try:
+                self.strategy_agent.reset_daily_health(status=status)
+            except Exception:
+                pass
         try:
-            health_file = Path("state/strategy_health.json")
-            if health_file.exists():
-                try:
-                    loaded = json.loads(health_file.read_text())
-                    persisted_rows = loaded.get("strategies", {}) or {}
-                    excluded = {"Ichimoku", "SqueezeMomentum", "GoldSilverPairs", "SMC_OrderBlocks"}
-                    filtered_persisted = [k for k in persisted_rows.keys() if k not in excluded]
-                    if len(filtered_persisted) == 43:
-                        return filtered_persisted
-                except Exception:
-                    pass
+            p = Path("state/strategy_health.json")
+            names = self._strategy_names()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "symbol": os.getenv("INSTRUMENT", "SILVERM"),
+                "date": today_str,
+                "status": status,
+                "timestamp": datetime.now(IST).isoformat(),
+                "scans": 0,
+                "strategies": {
+                    name: {"evaluated": 0, "voted": 0, "skipped": 0, "errors": 0}
+                    for name in names
+                },
+            }
+            p.write_text(json.dumps(payload, indent=2))
         except Exception:
             pass
-
-        return [
-            "TrendFollowing", "OpeningRangeBreakout", "VWAPMeanReversion", "VolatilityBreakout",
-            "DonchianBreakout", "BBMeanReversion", "MACrossover", "RSIDivergence",
-            "MomentumVolumeBreakout", "OrderFlowDelta", "TimeOfDaySeasonality",
-            "RSI2MeanReversion", "CalendarSeasonality", "TermStructure",
-            "SuperTrend+RSI", "VWAP+EMA", "ORB", "BBSqueeze", "ADX+PSAR",
-            "FVG", "UTBot", "CPR", "VolumeProfile", "LiqSweep",
-            "PriceAction", "OIAnalysis", "AMD", "GapDirection", "SMC",
-            "ValueArea", "GapMomentum", "ADXRising", "RangeSpread",
-            "StochRSI", "EMASlope", "HeikinAshi",
-            "VWAPExtreme", "OpeningRangeBias", "ElliottWave",
-            "StrikeMomentum", "GammaExposure", "IVContraction", "ExpiryWeek",
-        ]
 
     def _strategy_status(self, names: list[str] | None = None) -> list[dict]:
-        excluded = {"Ichimoku", "SqueezeMomentum", "GoldSilverPairs", "SMC_OrderBlocks"}
-        names = [n for n in list(names or self._strategy_names()) if n not in excluded]
-        default_43 = self._strategy_names()
-        for n in default_43:
-            if n not in names:
-                names.append(n)
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+        names = list(names or self._strategy_names())
         counts = {name: 0 for name in names}
         health = (
             self.strategy_agent.strategy_health_status()
@@ -1266,50 +1498,58 @@ class DashboardAlertAgent:
         )
         health_rows = dict(health.get("strategies", {}) or {})
 
-        # Merge with persisted state/strategy_health.json to ensure all 43 strategies have complete telemetry
+        # Merge with persisted state/strategy_health.json ONLY if strictly from today and not EOD_CLOSED
         health_file = Path("state/strategy_health.json")
         if health_file.exists():
             try:
                 loaded = json.loads(health_file.read_text())
-                persisted_rows = loaded.get("strategies", {}) or {}
-                for s_name, s_data in persisted_rows.items():
-                    if s_name not in health_rows or int(health_rows[s_name].get("evaluated", 0)) == 0:
-                        health_rows[s_name] = s_data
-                    else:
-                        health_rows[s_name]["evaluated"] = max(
-                            int(health_rows[s_name].get("evaluated", 0)),
-                            int(s_data.get("evaluated", 0)),
-                        )
-                        health_rows[s_name]["voted"] = max(
-                            int(health_rows[s_name].get("voted", 0)),
-                            int(s_data.get("voted", 0)),
-                        )
+                persisted_date = str(loaded.get("date", ""))[:10]
+                persisted_status = loaded.get("status", "")
+                if persisted_date == today_str and persisted_status != "EOD_CLOSED":
+                    persisted_rows = loaded.get("strategies", {}) or {}
+                    for s_name, s_data in persisted_rows.items():
+                        if s_name not in health_rows or int(health_rows[s_name].get("evaluated", 0)) == 0:
+                            health_rows[s_name] = s_data
+                        else:
+                            health_rows[s_name]["evaluated"] = max(
+                                int(health_rows[s_name].get("evaluated", 0)),
+                                int(s_data.get("evaluated", 0)),
+                            )
+                            health_rows[s_name]["voted"] = max(
+                                int(health_rows[s_name].get("voted", 0)),
+                                int(s_data.get("voted", 0)),
+                            )
+                elif persisted_date != today_str or persisted_status == "EOD_CLOSED":
+                    health_rows = {name: {"evaluated": 0, "voted": 0, "skipped": 0, "errors": 0} for name in names}
             except Exception:
                 pass
 
-        # Collect trade rows from in-memory analytics journal
-        rows = list(getattr(self.analytics_agent, "_journal", []) or [])
+        # Collect trade rows for TODAY only
+        all_rows = list(getattr(self.analytics_agent, "_journal", []) or [])
 
-        # Also merge with persistent live trade history
         try:
-            from utils.live_trade_history import get_live_trade_history
-            persisted_trades = get_live_trade_history().rows(include_backtest=False)
-            rows.extend(persisted_trades)
+            from utils.live_trade_history import get_trade_history
+            all_rows.extend(get_trade_history().rows(include_backtest=False))
         except Exception:
             pass
 
-        # Also merge with live paper journal if present
         try:
             pj_path = Path("state/live_paper_journal.json")
             if pj_path.exists():
                 pj_data = json.loads(pj_path.read_text())
-                for ct in pj_data.get("closed_trades", []):
-                    rows.append(ct)
+                all_rows.extend(pj_data.get("closed_trades", []))
                 open_pos = pj_data.get("open_position")
                 if open_pos:
-                    rows.append(open_pos)
+                    all_rows.append(open_pos)
         except Exception:
             pass
+
+        # CRITICAL: Filter exclusively for trades/signals occurring TODAY
+        rows = []
+        for r in all_rows:
+            r_date = str(r.get("date") or r.get("trade_date") or r.get("timestamp") or r.get("entry_time") or "")[:10]
+            if r_date == today_str:
+                rows.append(r)
 
         for row in rows:
             raw = (
@@ -1545,16 +1785,16 @@ class DashboardAlertAgent:
                 "threshold": (
                     ML_THRESHOLD_OVERRIDE
                     if loaded and getattr(ensemble, "is_trained", False) and ML_THRESHOLD_OVERRIDE > 0
-                    else (getattr(ensemble, "decision_threshold", 0.45) if loaded else 0.45)
+                    else (getattr(ensemble, "decision_threshold", 0.32) if loaded else 0.32)
                 ),
                 "models": list(getattr(ensemble, "models", {}).keys()) or ["xgb", "lgb", "rf"],
                 "model_path": str(model_path),
                 "requested_model_path": str(requested),
                 "model_timeframe": "5minute",
                 "model_fallback_used": False,
-                "trained_at": getattr(meta, "trained_at", "2026-06-26"),
-                "val_auc": float(getattr(meta, "val_auc", 0.55) or 0.55),
-                "val_precision": float(getattr(meta, "val_precision", 0.309) or 0.309),
+                "trained_at": getattr(meta, "trained_at", "2026-09-05"),
+                "val_auc": float(getattr(meta, "val_auc", 0.576) or 0.576),
+                "val_precision": float(getattr(meta, "val_precision", 0.450) or 0.450),
                 "agent_attached": bool(self.ml_agent),
                 "source": "model_file",
             }
@@ -1876,10 +2116,12 @@ class DashboardAlertAgent:
             }
             payload["live_history"] = self._live_trade_history_payload(payload["journal_rows"])
             try:
-                from utils.live_trade_history import get_live_trade_history
-                from utils.equity_curve import get_equity_curve
-                payload["journal_trades"] = get_live_trade_history().rows()
-                payload["journal_summary"] = get_equity_curve().get_summary()
+                from utils.live_trade_history import get_trade_history
+                from utils.equity_curve import get_equity_curve, get_observe_equity_curve
+                mode = self._get_trading_mode().upper()
+                payload["journal_trades"] = get_trade_history().rows()
+                eq = get_observe_equity_curve() if mode == "OBSERVE" else get_equity_curve()
+                payload["journal_summary"] = eq.get_summary()
             except Exception:
                 pass
             return jsonify(self._to_json_safe(payload))
@@ -2155,7 +2397,7 @@ class DashboardAlertAgent:
             try:
                 store = HistoricalCandleStore()
                 return jsonify({
-                    "coverage": store.coverage(symbol="NIFTY"),
+                    "coverage": store.coverage(symbol=os.getenv("INSTRUMENT", "SILVERM")),
                     "backtest_limits": get_backtest_limits(),
                 })
             except Exception as exc:
@@ -2179,6 +2421,22 @@ class DashboardAlertAgent:
             import asyncio
             if self.position_agent:
                 asyncio.run(self.position_agent.manual_exit())
+
+        @socketio.on("reset_strategies")
+        def on_reset_strategies():
+            self._reset_daily_strategy_status(status="ACTIVE")
+            payload = self._status_payload()
+            socketio.emit("status_update", self._to_json_safe(payload))
+
+        @app.route("/api/strategies/reset", methods=["POST", "GET"])
+        def api_reset_strategies():
+            try:
+                self._reset_daily_strategy_status(status="ACTIVE")
+                payload = self._status_payload()
+                socketio.emit("status_update", self._to_json_safe(payload))
+                return jsonify({"status": "ok", "message": "Daily strategy health reset"})
+            except Exception as exc:
+                return jsonify({"error": str(exc)}), 500
 
         def _run():
             logger.info(f"[{self.NAME}] Dashboard  http://localhost:{DASHBOARD_PORT}")

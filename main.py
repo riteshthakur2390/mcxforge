@@ -20,6 +20,13 @@ import asyncio, warnings
 warnings.filterwarnings("ignore", category=ImportWarning)
 warnings.filterwarnings("ignore", message=".*find_spec\\(\\).not found; falling back to find_module\\(\\).*")
 warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*")
+warnings.filterwarnings("ignore", message=r"(?s).*If you are loading a serialized model.*")
+warnings.filterwarnings("ignore", message=r"(?s).*Trying to unpickle estimator.*")
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+except ImportError:
+    pass
 import os
 import signal
 import sys

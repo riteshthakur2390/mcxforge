@@ -5,8 +5,8 @@ from config.settings.utils import *
 # ── IDENTITY ──
 APP_NAME   = "MCXForge"
 VERSION    = "1.0.0"
-INSTRUMENT = os.getenv("INSTRUMENT", "SILVERMIC")
-COMMODITY  = os.getenv("COMMODITY", "SILVERMIC")
+INSTRUMENT = os.getenv("INSTRUMENT", "SILVERM")
+COMMODITY  = os.getenv("COMMODITY", "SILVERM")
 
 # ── ZERODHA KITE ──
 KITE_API_KEY      = os.getenv("KITE_API_KEY", "")

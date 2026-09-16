@@ -56,6 +56,7 @@ OPTION_SYMBOL_RE = re.compile(r"^([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)$")
 
 class DataFetcherAgent:
     NAME = "DataFetcherAgent"
+    _symbol: str = os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM")).upper()
 
     def __init__(self) -> None:
         self.bus = get_bus()
@@ -69,6 +70,7 @@ class DataFetcherAgent:
         self._session_date = datetime.now(IST).date()
         self._latest_ltp: float = 0.0
         self._latest_aux_ltps: dict[str, float] = {}
+        self._last_quote_heartbeat: float = 0.0
         self._last_oi_bucket: datetime | None = None
         self._last_df: pd.DataFrame | None = None
         self._premarket_published = False
@@ -77,12 +79,13 @@ class DataFetcherAgent:
         self._orb_dir = Path(JOURNAL_DIR) / "orb"
         self._orb_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"[{self.NAME}] Initialized | broker={self.broker.broker_name.upper()}")
+        self._symbol = os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM")).upper()
         self._oi_recorder = OIRecorder(self.broker)
         self._option_volume_recorder = OptionVolumeRecorder(
             self.broker,
             self._historical_store,
             cache_dir=DATA_CACHE_DIR,
-            symbol="NIFTY",
+            symbol=self._symbol,
         )
 
     async def start(self) -> None:
@@ -91,7 +94,7 @@ class DataFetcherAgent:
         await self._restore_orb_state_if_available(datetime.now(IST))
         
         # Ensure fresh history for backtesting/archival immediately on boot
-        asyncio.create_task(asyncio.to_thread(ensure_backtest_cache))
+        asyncio.create_task(asyncio.to_thread(ensure_backtest_cache, (self._symbol,)))
         
         self._running = True
         await asyncio.gather(
@@ -104,7 +107,14 @@ class DataFetcherAgent:
         self._running = False
 
     def get_option_ltp(self, option_symbol: str) -> float:
-        return self.broker.get_option_ltp(option_symbol)
+        val = 0.0
+        try:
+            val = float(self.broker.get_option_ltp(option_symbol) or 0.0)
+        except Exception:
+            val = 0.0
+        if val > 0:
+            return val
+        return self.get_option_candle_close(option_symbol, datetime.now(IST), interval="5minute")
 
     def get_option_candle_close(self, option_symbol: str, timestamp, interval: str = "1minute") -> float:
         match = OPTION_SYMBOL_RE.match(str(option_symbol or "").upper().strip())
@@ -150,6 +160,12 @@ class DataFetcherAgent:
     def get_nifty_ltp(self) -> float:
         return self._latest_ltp
 
+    def get_latest_ltps(self) -> dict[str, float]:
+        ltps = dict(self._latest_aux_ltps)
+        if self._latest_ltp > 0:
+            ltps[self.symbol] = self._latest_ltp
+        return ltps
+
     def get_oi_recorder(self) -> OIRecorder:
         return self._oi_recorder
 
@@ -160,7 +176,7 @@ class DataFetcherAgent:
 
     async def _publish_premarket_bias(self) -> None:
         try:
-            vix = self._best_effort_quote("INDIA VIX", default=14.0)
+            vix = 14.0
             session = self._resolve_premarket_session_values()
             prev_close = session["prev_close"]
             today_open = session["today_open"]
@@ -174,6 +190,7 @@ class DataFetcherAgent:
                 bias, gap_pct = "NEUTRAL", 0.0
 
             payload = {
+                "symbol": self._symbol,
                 "bias": bias, "india_vix": vix,
                 "gap_pct": round(gap_pct, 3),
                 "nifty_prev_close": prev_close or 0,
@@ -254,11 +271,19 @@ class DataFetcherAgent:
                                         .iloc[-1]
                                     )
 
-                                vix_live = 14.0
-                                inst_name = os.getenv("INSTRUMENT", "SILVERMIC")
+                                vix_live = 0.0
+                                inst_name = self._symbol
+                                gold_ltp = self._best_effort_quote("GOLD")
+                                crude_ltp = self._best_effort_quote("CRUDEOIL")
+                                natgas_ltp = self._best_effort_quote("NATURALGAS")
                                 ltps = {
                                     inst_name: ltp,
+                                    "SILVERM": ltp,
                                     "SILVERMIC": ltp,
+                                    "GOLD": gold_ltp,
+                                    "CRUDEOIL": crude_ltp,
+                                    "NATURALGAS": natgas_ltp,
+                                    "NATGAS": natgas_ltp,
                                 }
 
                                 if now_str >= ORB_END_TIME and not self._orb_published:
@@ -269,9 +294,14 @@ class DataFetcherAgent:
                                             f"H={self._orb_high} L={self._orb_low}"
                                         )
                                     else:
-                                        self._orb_high, self._orb_low = compute_orb(df)
+                                        self._orb_high, self._orb_low = compute_orb(
+                                            df,
+                                            orb_start=MARKET_OPEN_TIME,
+                                            orb_end=ORB_END_TIME,
+                                        )
                                         if self._orb_high and self._orb_low:
                                             orb_payload = {
+                                                "symbol": self._symbol,
                                                 "orb_high": self._orb_high,
                                                 "orb_low": self._orb_low,
                                                 "orb_range": round(self._orb_high - self._orb_low, 2),
@@ -468,7 +498,7 @@ class DataFetcherAgent:
             # Keep recent candles synced into the local long-horizon store.
             self._historical_store.upsert_candles(
                 df.tail(3),
-                symbol="NIFTY",
+                symbol=self.symbol,
                 interval=LIVE_TIMEFRAME,
                 broker=self.broker.broker_name,
                 source="live_fetcher",
@@ -507,11 +537,12 @@ class DataFetcherAgent:
         while self._running:
             now = datetime.now(IST)
             now_str = now.strftime("%H:%M")
-            if MARKET_OPEN_TIME <= now_str <= "15:45" and is_trading_day(now.date()):
+            if MARKET_OPEN_TIME <= now_str <= "23:30" and is_trading_day(now.date()):
                 try:
+                    payload = self._tick_payload(now=now)
                     await self.bus.publish(
                         Topic.TICK_UPDATE,
-                        self._tick_payload(now=now),
+                        payload,
                         self.NAME,
                     )
                 except Exception as e:
@@ -561,7 +592,7 @@ class DataFetcherAgent:
             requested_interval = LIVE_TIMEFRAME
             source_interval = "1minute" if requested_interval == "3minute" else requested_interval
             df = self.broker.get_historical_data(
-                symbol="NIFTY", interval=source_interval,
+                symbol=self._symbol, interval=source_interval,
                 from_date=start.strftime("%Y-%m-%d"),
                 to_date=end.strftime("%Y-%m-%d"),
             )
@@ -580,7 +611,7 @@ class DataFetcherAgent:
             end = datetime.now(IST)
             start = end - timedelta(days=max(days, 10))
             df = self.broker.get_historical_data(
-                symbol="NIFTY",
+                symbol=self._symbol,
                 interval="day",
                 from_date=start.strftime("%Y-%m-%d"),
                 to_date=end.strftime("%Y-%m-%d"),
@@ -593,14 +624,14 @@ class DataFetcherAgent:
             return None
 
     def fetch_historical(self, weeks: int = 100, interval: str = "5minute", force: bool = False) -> pd.DataFrame:
-        cache = Path(DATA_CACHE_DIR) / f"NIFTY_{interval}_{self.broker.broker_name}.parquet"
+        cache = Path(DATA_CACHE_DIR) / f"{self._symbol}_{interval}_{self.broker.broker_name}.parquet"
         if cache.exists() and not force:
             return pd.read_parquet(cache)
         end = datetime.now(IST)
         start = end - timedelta(weeks=weeks)
         source_interval = "1minute" if interval == "3minute" else interval
         df = self.broker.get_historical_data(
-            "NIFTY", source_interval,
+            self._symbol, source_interval,
             start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"),
         )
         if df is None or df.empty:
@@ -623,11 +654,16 @@ class DataFetcherAgent:
     def _get_prev_close_from_cache(self, as_of_date=None) -> float | None:
         as_of_date = as_of_date or datetime.now(IST).date()
         try:
-            for fname in [
-                f"NIFTY_day_{self.broker.broker_name}.parquet",
-                # fallback: try any cached daily file
-                *[str(p.name) for p in Path(DATA_CACHE_DIR).glob("NIFTY_day_*.parquet")],
-            ]:
+            candidates = [
+                f"{self._symbol}_day_{self.broker.broker_name}.parquet",
+                *[str(p.name) for p in Path(DATA_CACHE_DIR).glob(f"{self._symbol}_day_*.parquet")],
+                *[str(p.name) for p in Path(DATA_CACHE_DIR).glob("*_day_*.parquet")],
+            ]
+            seen = set()
+            for fname in candidates:
+                if fname in seen:
+                    continue
+                seen.add(fname)
                 p = Path(DATA_CACHE_DIR) / fname
                 if p.exists():
                     df = pd.read_parquet(p).sort_index()
@@ -700,6 +736,13 @@ class DataFetcherAgent:
     def _orb_state_path(self, session_date) -> Path:
         if hasattr(session_date, "isoformat"):
             session_date = session_date.isoformat()
+        sym = getattr(self, "_symbol", "")
+        if sym:
+            sym_path = self._orb_dir / f"orb_{sym}_{session_date}.json"
+            legacy_path = self._orb_dir / f"orb_{session_date}.json"
+            if legacy_path.exists() and not sym_path.exists():
+                return legacy_path
+            return sym_path
         return self._orb_dir / f"orb_{session_date}.json"
 
     def _persist_orb_state(self, payload: dict) -> None:
@@ -729,6 +772,10 @@ class DataFetcherAgent:
         orb_state = self._load_orb_state(self._session_date)
         if not orb_state:
             return False
+        cached_sym = str(orb_state.get("symbol") or "")
+        if cached_sym and cached_sym != self._symbol:
+            logger.info(f"[{self.NAME}] Discarding stale ORB for {cached_sym} != {self._symbol}")
+            return False
         try:
             orb_high = float(orb_state.get("orb_high", 0.0) or 0.0)
             orb_low = float(orb_state.get("orb_low", 0.0) or 0.0)
@@ -736,16 +783,20 @@ class DataFetcherAgent:
             return False
         if orb_high <= 0 or orb_low <= 0:
             return False
+
         self._orb_high = orb_high
         self._orb_low = orb_low
         self._orb_published = True
-        await self.bus.publish(Topic.ORB_FORMED, {
+        payload = {
             "orb_high": orb_high,
             "orb_low": orb_low,
             "orb_range": float(orb_state.get("orb_range", round(orb_high - orb_low, 2)) or 0.0),
             "session_date": str(orb_state.get("session_date") or self._session_date.isoformat()),
             "formed_at": str(orb_state.get("formed_at") or now.isoformat()),
-        }, self.NAME)
+        }
+        if "symbol" in orb_state:
+            payload["symbol"] = orb_state["symbol"]
+        await self.bus.publish(Topic.ORB_FORMED, payload, self.NAME)
         return True
 
     @staticmethod
@@ -768,17 +819,8 @@ class DataFetcherAgent:
         return not latest_df.empty
 
     def _best_effort_quote(self, symbol: str, default: float = 0.0) -> float:
-        if symbol == "INDIA VIX":
-            try:
-                latest = float(self.broker.get_india_vix() or 0.0)
-            except Exception:
-                latest = 0.0
-            if 8.0 <= latest <= 80.0:
-                self._latest_aux_ltps[symbol] = latest
-                return latest
-            if symbol in self._latest_aux_ltps:
-                return self._latest_aux_ltps[symbol]
-            return default
+        if symbol in ("INDIA VIX", "VIX"):
+            return 0.0
 
         try:
             latest = float(self.broker.get_ltp(symbol) or 0.0)
@@ -793,18 +835,36 @@ class DataFetcherAgent:
 
     def _tick_payload(self, now: datetime | None = None) -> dict:
         now = now or datetime.now(IST)
-        nifty_ltp = self._best_effort_quote("NIFTY", default=self._latest_ltp)
-        self._latest_ltp = nifty_ltp
+        needed_symbols = list({self._symbol, "SILVERM", "GOLD", "CRUDEOIL", "NATURALGAS"})
+        if hasattr(self.broker, "get_quotes"):
+            try:
+                batch_quotes = self.broker.get_quotes(needed_symbols)
+                for s, p in batch_quotes.items():
+                    if p > 0:
+                        self._latest_aux_ltps[s] = p
+            except Exception:
+                pass
+
+        inst_ltp = self._best_effort_quote(self._symbol, default=self._latest_ltp)
+        if inst_ltp > 0:
+            self._latest_ltp = inst_ltp
+        silver_ltp = inst_ltp if "SILVER" in self._symbol else self._best_effort_quote("SILVERM", default=self._latest_ltp)
+        gold_ltp = self._best_effort_quote("GOLD")
+        crude_ltp = self._best_effort_quote("CRUDEOIL")
+        natgas_ltp = self._best_effort_quote("NATURALGAS")
         return {
-            "symbol": "NIFTY",
-            "ltp": nifty_ltp,
+            "symbol": self._symbol,
+            "ltp": self._latest_ltp,
             "ltps": {
-                "NIFTY": nifty_ltp,
-                "BANKNIFTY": self._best_effort_quote("BANKNIFTY"),
-                # SENSEX only relevant on Thu/Fri (SENSEX options expiry)
-                "SENSEX": self._best_effort_quote("SENSEX") if now.weekday() in (3, 4) else 0.0,
+                self._symbol: self._latest_ltp,
+                "SILVERM": silver_ltp,
+                "SILVERMIC": silver_ltp,
+                "GOLD": gold_ltp,
+                "CRUDEOIL": crude_ltp,
+                "NATURALGAS": natgas_ltp,
+                "NATGAS": natgas_ltp,
             },
-            "vix": self._best_effort_quote("INDIA VIX", default=14.0),
+            "vix": 0.0,
             "broker": self.broker.broker_name,
             "timestamp": now.isoformat(),
             "server_timestamp": now.isoformat(),

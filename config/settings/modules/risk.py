@@ -126,7 +126,7 @@ MIN_EXPECTED_PROFIT = 100.0  # Minimum expected P&L after costs to take trade (�
 # Volatility-adjusted position sizing using ATR as proxy for risk
 # Higher ATR = smaller position (more volatile = more risk per lot)
 POSITION_SIZING_MODE = "fixed"  # "fixed" | "volatility" | "kelly"
-CAPITAL_PER_TRADE = float(os.getenv("CAPITAL_PER_TRADE", "30000.0"))  # 15% of ₹200,000 capital
+CAPITAL_PER_TRADE = float(os.getenv("CAPITAL_PER_TRADE", "40000.0"))  # 20% of ₹200,000 capital
 MAX_LOTS_PER_TRADE = 3  # maximum lots regardless of sizing
 KELLY_FRACTION = 0.25  # fraction of Kelly criterion to use (conservative)
 
@@ -207,8 +207,8 @@ STALE_MAX_CANDLES = 15
 
 # ── CAPITAL & RISK GUARD (agent10_risk) ──
 TOTAL_FUND = float(os.getenv("TOTAL_FUND", "200000"))
-DEPLOYED_CAPITAL = float(os.getenv("DEPLOYED_CAPITAL", "30000"))
-STRONG_SIGNAL_CAPITAL_PCT = float(os.getenv("STRONG_SIGNAL_CAPITAL_PCT", "15.0"))
+DEPLOYED_CAPITAL = float(os.getenv("DEPLOYED_CAPITAL", "40000"))
+STRONG_SIGNAL_CAPITAL_PCT = float(os.getenv("STRONG_SIGNAL_CAPITAL_PCT", "20.0"))
 RISK_PER_TRADE_PCT = 1.0
 MAX_DAILY_LOSS_INR = 0
 MIN_DELTA_EXIT = 0.15

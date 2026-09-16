@@ -152,7 +152,10 @@ class GreeksFilter:
                                  f"OTM option won't move enough"),
             )
 
-        max_theta = self.MAX_THETA_DAY * (6.0 if (allow_expiry_day or dte <= 1) else 1.0)
+        # Theta decay limit: ₹8/day for standard Nifty options (premium ~₹100),
+        # or up to 6% of premium/day for commodities and high-premium options (Silver, Gold where premium is ₹4000-8000)
+        theta_base_limit = max(self.MAX_THETA_DAY, est_premium * 0.06)
+        max_theta = theta_base_limit * (6.0 if (allow_expiry_day or dte <= 1) else 1.0)
         if theta > max_theta:
             return GreeksResult(
                 tradeable     = False,

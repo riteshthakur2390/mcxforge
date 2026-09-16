@@ -2,5 +2,6 @@
   "symbol": "SILVERM",
   "current_cash": 200000.0,
   "open_position": null,
-  "closed_trades": []
+  "closed_trades": [],
+  "last_update": "2026-09-09T09:54:37.195095+05:30"
 }

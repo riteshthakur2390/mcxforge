@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """
-scripts/premarket_checklist.py — Pre-Market Risk Gate
-======================================================
-Run at 09:00 IST every trading morning (before 09:15 open).
+scripts/premarket_checklist.py — MCXForge Pre-Market Risk Gate
+==============================================================
+Run at 08:50 IST every trading morning (before 09:00 MCX open).
 Checks all pre-market risk conditions and sets the day's trading posture.
 
 Schedule in cron:
-  0 9 * * 1-5 cd /opt/signalforge && python scripts/premarket_checklist.py
+  50 8 * * 1-5 cd /Users/vishranti/Downloads/projects/mcxforge && ./venv/bin/python scripts/premarket_checklist.py
 
 CHECKS PERFORMED:
-  1. India VIX level (> 28 = reduce size, > 35 = OBSERVE only)
-  2. NIFTY overnight gap (> 1.5% = volatile open, reduce size)
-  3. Equity curve risk signal (PAUSE / REDUCE_SIZE / NORMAL)
-  4. Daily loss carry-over check (yesterday's circuit breaker)
-  5. Expiry day detection (Thursday = different strategy behaviour)
-  6. Global market overview (SGX Nifty proxy via yfinance)
-  7. Token validity check (broker auth still valid?)
+  1. Commodity Overnight Gap (> 2.0% = volatile open, reduce size)
+  2. Equity curve risk signal (PAUSE / REDUCE_SIZE / NORMAL)
+  3. Broker Token & Quote validity check (broker auth & active contract quote)
+  4. Active Commodity Contract Resolution (MCX instrument & lot sizing)
 
 OUTPUT:
   - Console report with colour coding
@@ -24,99 +21,85 @@ OUTPUT:
   - Sets TRADING_POSTURE env variable for session
 
 POSTURE LEVELS:
-  FULL_SIZE   → all systems normal, trade with 100% position sizing
+  FULL_SIZE   → all systems normal, trade with standard position sizing
   REDUCE_HALF → elevated risk detected, use 50% position size
-  OBSERVE     → too risky, watch only, no trades today
+  OBSERVE     → too risky, paper watch only, zero live orders
 """
+
+from __future__ import annotations
 
 import json
 import os
+import re
 import sys
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytz
+
 IST = pytz.timezone("Asia/Kolkata")
 
 try:
     from config.settings import (
-        PREMARKET_MAX_VIX, PREMARKET_MAX_GAP_PCT,
-        TELEGRAM_ENABLED, LOGS_DIR, JOURNAL_DIR,
-        DEPLOYED_CAPITAL, MAX_DAILY_LOSS_PCT,
+        DEPLOYED_CAPITAL,
+        JOURNAL_DIR,
+        LOGS_DIR,
+        MAX_DAILY_LOSS_PCT,
+        PREMARKET_MAX_GAP_PCT,
+        TELEGRAM_ENABLED,
     )
 except ImportError:
-    PREMARKET_MAX_VIX     = 28.0
-    PREMARKET_MAX_GAP_PCT = 1.5
-    TELEGRAM_ENABLED      = False
-    LOGS_DIR              = "logs"
-    JOURNAL_DIR           = "journal"
-    DEPLOYED_CAPITAL      = 200000
-    MAX_DAILY_LOSS_PCT    = 3.0
+    PREMARKET_MAX_GAP_PCT = 2.0
+    TELEGRAM_ENABLED = False
+    LOGS_DIR = "logs"
+    JOURNAL_DIR = "journal"
+    DEPLOYED_CAPITAL = 200000
+    MAX_DAILY_LOSS_PCT = 3.0
 
 REPORT_PATH = Path(LOGS_DIR)
 REPORT_PATH.mkdir(exist_ok=True)
 
-G   = "\033[92m"
-Y   = "\033[93m"
-R   = "\033[91m"
-B   = "\033[94m"
-W   = "\033[97m"
+G = "\033[92m"
+Y = "\033[93m"
+R = "\033[91m"
+B = "\033[94m"
+W = "\033[97m"
 RST = "\033[0m"
 
 
-def check_vix() -> dict:
-    """Check India VIX level."""
+def check_gap(symbol: str) -> dict:
+    """Check commodity overnight gap from previous close."""
+    gap_pct = 0.0
     try:
-        import yfinance as yf
-        vix = yf.Ticker("^INDIAVIX").fast_info.get("lastPrice", 0)
-        if vix == 0:
-            hist = yf.download("^INDIAVIX", period="2d", interval="1d", progress=False)
-            vix  = float(hist["Close"].iloc[-1]) if len(hist) > 0 else 18.0
-    except Exception:
-        vix = 18.0   # safe default if data unavailable
-
-    if vix > 35:
-        level, posture = "EXTREME", "OBSERVE"
-    elif vix > PREMARKET_MAX_VIX:
-        level, posture = "HIGH", "REDUCE_HALF"
-    elif vix > 20:
-        level, posture = "ELEVATED", "FULL_SIZE"
-    else:
-        level, posture = "NORMAL", "FULL_SIZE"
-
-    return {"vix": round(vix, 2), "level": level, "posture": posture}
-
-
-def check_gap() -> dict:
-    """Check NIFTY overnight gap from previous close."""
-    try:
-        import yfinance as yf
-        hist = yf.download("^NSEI", period="5d", interval="1d", progress=False)
-        if len(hist) >= 2:
-            prev_close = float(hist["Close"].iloc[-2])
-            today_open = float(hist["Open"].iloc[-1])
-            gap_pct    = (today_open - prev_close) / prev_close * 100
-        else:
-            gap_pct    = 0.0
+        from broker.factory import create_broker
+        broker = create_broker()
+        now = datetime.now()
+        start = (now - pytz.timezone("Asia/Kolkata").localize(datetime.now()).replace(tzinfo=None)).strftime("%Y-%m-%d")
+        df = broker.get_historical_data(symbol, "5m", days_back=3)
+        if df is not None and len(df) >= 2:
+            prev_close = float(df["close"].iloc[-2])
+            last_close = float(df["close"].iloc[-1])
+            if prev_close > 0:
+                gap_pct = (last_close - prev_close) / prev_close * 100
     except Exception:
         gap_pct = 0.0
 
     if abs(gap_pct) > PREMARKET_MAX_GAP_PCT:
         posture = "REDUCE_HALF"
-        level   = "LARGE_GAP"
-    elif abs(gap_pct) > 0.75:
+        level = "LARGE_GAP"
+    elif abs(gap_pct) > 1.0:
         posture = "FULL_SIZE"
-        level   = "MODERATE_GAP"
+        level = "MODERATE_GAP"
     else:
         posture = "FULL_SIZE"
-        level   = "FLAT_OPEN"
+        level = "FLAT_OPEN"
 
     return {
-        "gap_pct":  round(gap_pct, 3),
-        "level":    level,
-        "posture":  posture,
+        "gap_pct": round(gap_pct, 3),
+        "level": level,
+        "posture": posture,
         "direction": "UP" if gap_pct > 0.3 else "DOWN" if gap_pct < -0.3 else "FLAT",
     }
 
@@ -125,58 +108,60 @@ def check_equity_curve() -> dict:
     """Check equity curve risk signal from yesterday's performance."""
     try:
         from utils.equity_curve import get_equity_curve
-        curve  = get_equity_curve()
+
+        curve = get_equity_curve()
         signal = curve.get_risk_signal()
         streak = curve.get_streak_info()
-        posture = {"PAUSE": "OBSERVE", "REDUCE_SIZE": "REDUCE_HALF",
-                   "NORMAL": "FULL_SIZE"}.get(signal, "FULL_SIZE")
+        posture = {
+            "PAUSE": "OBSERVE",
+            "REDUCE_SIZE": "REDUCE_HALF",
+            "NORMAL": "FULL_SIZE",
+        }.get(signal, "FULL_SIZE")
         return {"signal": signal, "posture": posture, "streak": streak}
     except Exception:
         return {"signal": "NORMAL", "posture": "FULL_SIZE", "streak": {}}
 
 
-def check_broker_token() -> dict:
-    """Verify broker token is still valid."""
+def check_broker_token(symbol: str) -> dict:
+    """Verify broker token is still valid and fetch active commodity LTP."""
     try:
         from broker.factory import create_broker
+
         broker = create_broker()
-        ltp    = broker.get_ltp("NIFTY")
-        valid  = ltp > 0
-        return {"valid": valid, "nifty_ltp": round(ltp, 2), "broker": broker.broker_name}
+        ltp = float(broker.get_ltp(symbol) or 0.0)
+        valid = ltp > 0
+        return {
+            "valid": valid,
+            "ltp": round(ltp, 2),
+            "symbol": symbol,
+            "broker": getattr(broker, "broker_name", broker.__class__.__name__),
+        }
     except Exception as e:
-        return {"valid": False, "error": str(e)[:80]}
+        return {"valid": False, "symbol": symbol, "error": str(e)[:80]}
 
 
-def check_expiry() -> dict:
-    """Detect NIFTY Thursday expiry and SENSEX Friday expiry."""
-    today    = date.today()
-    is_expiry = today.weekday() == 3   # Thursday
-    is_friday      = today.weekday() == 4
-    is_sensex_expiry = is_friday
+def check_commodity_contract(symbol: str) -> dict:
+    """Check active commodity instrument and contract details."""
+    try:
+        from utils.instrument_selector import get_instrument
 
-    note = "Normal trading day"
-    if is_expiry:
-        note = "NIFTY EXPIRY Thursday — Trading SENSEX options today to avoid NIFTY expiry gamma"
-    elif is_sensex_expiry:
-        note = "SENSEX EXPIRY Friday — Theta acceleration play on SENSEX options"
-
-    return {
-        "is_expiry":         is_expiry,
-        "is_sensex_expiry":  is_sensex_expiry,
-        "instrument_today":  "SENSEX" if (is_expiry or is_sensex_expiry) else "NIFTY",
-        "day":               today.strftime("%A"),
-        "note":              note,
-    }
+        cfg = get_instrument(symbol)
+        return {
+            "symbol": cfg.name,
+            "lot_size": cfg.lot_size,
+            "tick_size": cfg.tick_size,
+            "point_value": cfg.point_value,
+            "strike_step": cfg.strike_step,
+            "product_type": cfg.product_type,
+            "trading_hours": "09:00 - 23:30 IST",
+        }
+    except Exception as exc:
+        return {"symbol": symbol, "error": str(exc)}
 
 
 def determine_posture(checks: dict) -> str:
-    """
-    Combine all checks into final trading posture for the day.
-
-    Logic: most restrictive check wins.
-    """
+    """Combine all checks into final trading posture for the day."""
     postures = [
-        checks["vix"]["posture"],
         checks["gap"]["posture"],
         checks["equity"]["posture"],
     ]
@@ -189,28 +174,27 @@ def determine_posture(checks: dict) -> str:
     return "FULL_SIZE"
 
 
-def format_report(checks: dict, posture: str) -> str:
+def format_report(checks: dict, posture: str, symbol: str) -> str:
     """Build a formatted console report."""
-    now  = datetime.now(IST).strftime("%d %b %Y  %H:%M IST")
-    vix  = checks["vix"]
-    gap  = checks["gap"]
-    eq   = checks["equity"]
-    tok  = checks["token"]
-    exp  = checks["expiry"]
+    now = datetime.now(IST).strftime("%d %b %Y  %H:%M IST")
+    gap = checks["gap"]
+    eq = checks["equity"]
+    tok = checks["token"]
+    contract = checks["contract"]
 
-    vix_col = R if vix["level"] == "EXTREME" else Y if vix["level"] == "HIGH" else G
     gap_col = Y if gap["level"] == "LARGE_GAP" else G
-    eq_col  = R if eq["signal"] == "PAUSE" else Y if eq["signal"] == "REDUCE_SIZE" else G
+    eq_col = R if eq["signal"] == "PAUSE" else Y if eq["signal"] == "REDUCE_SIZE" else G
     tok_col = G if tok.get("valid") else R
     pos_col = G if posture == "FULL_SIZE" else Y if posture == "REDUCE_HALF" else R
 
     lines = [
         f"\n{B}{'═'*60}{RST}",
-        f"{B}  SignalForge — Pre-Market Checklist  |  {now}{RST}",
+        f"{B}  MCXForge — Pre-Market Checklist  |  {now}{RST}",
         f"{B}{'═'*60}{RST}\n",
-        f"  {W}VIX Check:{RST}",
-        f"    India VIX:   {vix_col}{vix['vix']:.1f}  ({vix['level']}){RST}",
-        f"    Posture:     {vix_col}{vix['posture']}{RST}\n",
+        f"  {W}Active Commodity:{RST}",
+        f"    Symbol:      {Y}{contract.get('symbol', symbol)}{RST}",
+        f"    Lot Size:    {contract.get('lot_size', '—')}",
+        f"    Hours:       {contract.get('trading_hours', '09:00 - 23:30 IST')}\n",
         f"  {W}Gap Check:{RST}",
         f"    Gap:         {gap_col}{gap['gap_pct']:+.2f}%  ({gap['level']} {gap['direction']}){RST}",
         f"    Posture:     {gap_col}{gap['posture']}{RST}\n",
@@ -218,17 +202,13 @@ def format_report(checks: dict, posture: str) -> str:
         f"    Signal:      {eq_col}{eq['signal']}{RST}",
         f"    Streak:      {eq['streak'].get('streak','—')} × {eq['streak'].get('count',0)} days",
         f"    Posture:     {eq_col}{eq['posture']}{RST}\n",
-        f"  {W}Broker Token:{RST}",
-        f"    Status:      {tok_col}{'✅ VALID' if tok.get('valid') else '❌ INVALID — run auth script'}{RST}",
+        f"  {W}Broker Token & Quote:{RST}",
+        f"    Status:      {tok_col}{'✅ VALID' if tok.get('valid') else '❌ INVALID — check broker auth'}{RST}",
     ]
-    if tok.get("nifty_ltp"):
-        lines.append(f"    NIFTY LTP:   ₹{tok['nifty_ltp']:,.2f}")
+    if tok.get("ltp"):
+        lines.append(f"    {symbol} LTP:   ₹{tok['ltp']:,.2f}")
     lines += [
         f"    Broker:      {tok.get('broker','—')}\n",
-        f"  {W}Expiry:{RST}",
-        f"    Today:       {exp['day']}  {'⚡ EXPIRY DAY' if exp['is_expiry'] else ''}",
-        f"    Instrument:  {Y}{exp['instrument_today']}{RST}",
-        f"    Note:        {exp['note']}\n",
         f"{'─'*60}",
         f"  {pos_col}{W}TODAY'S POSTURE:  {posture}{RST}",
         f"{'─'*60}",
@@ -236,8 +216,8 @@ def format_report(checks: dict, posture: str) -> str:
 
     if posture == "OBSERVE":
         lines += [
-            f"  {R}⛔ No new trades today.{RST}",
-            f"  {R}   Risk conditions too elevated for live positions.{RST}",
+            f"  {R}⛔ OBSERVE Mode: Paper simulation active.{RST}",
+            f"  {R}   Zero live orders placed to broker.{RST}",
         ]
     elif posture == "REDUCE_HALF":
         lines += [
@@ -246,36 +226,36 @@ def format_report(checks: dict, posture: str) -> str:
         ]
     else:
         lines += [
-            f"  {G}✅ Normal trading day. Full position size allowed.{RST}",
+            f"  {G}✅ Normal trading day. Standard position size allowed.{RST}",
         ]
     lines.append("")
     return "\n".join(lines)
 
 
 def main() -> None:
-    print(f"\n{B}Running pre-market checks...{RST}")
+    print(f"\n{B}Running MCXForge pre-market checks...{RST}")
+    active_sym = os.getenv("INSTRUMENT", "SILVERM").strip().upper()
 
     checks = {
-        "vix":    check_vix(),
-        "gap":    check_gap(),
+        "gap": check_gap(active_sym),
         "equity": check_equity_curve(),
-        "token":  check_broker_token(),
-        "expiry": check_expiry(),
+        "token": check_broker_token(active_sym),
+        "contract": check_commodity_contract(active_sym),
     }
 
     posture = determine_posture(checks)
 
     # Print report
-    print(format_report(checks, posture))
+    print(format_report(checks, posture, active_sym))
 
     # Save JSON report
-    today     = date.today().isoformat()
-    report    = {
-        "date":    today,
-        "time":    datetime.now(IST).isoformat(),
+    today = date.today().isoformat()
+    report = {
+        "date": today,
+        "time": datetime.now(IST).isoformat(),
         "posture": posture,
-        "instrument": checks["expiry"]["instrument_today"],
-        "checks":  checks,
+        "instrument": active_sym,
+        "checks": checks,
     }
     json_path = REPORT_PATH / f"premarket_{today}.json"
     with open(json_path, "w") as f:
@@ -288,32 +268,27 @@ def main() -> None:
         content = env_path.read_text()
         updates = {
             "TRADING_POSTURE": posture,
-            "TRADING_INSTRUMENT": checks["expiry"]["instrument_today"],
-            "INSTRUMENT": checks["expiry"]["instrument_today"],
         }
-        import re
         for key, value in updates.items():
             if re.search(rf"^{key}=", content, flags=re.MULTILINE):
                 content = re.sub(rf"^{key}=.*$", f"{key}={value}", content, flags=re.MULTILINE)
             else:
                 content += f"\n{key}={value}\n"
         env_path.write_text(content)
-        print(
-            f"  .env updated: TRADING_POSTURE={posture}, "
-            f"TRADING_INSTRUMENT={checks['expiry']['instrument_today']}"
-        )
+        print(f"  .env updated: TRADING_POSTURE={posture}")
 
     # Send Telegram
     if TELEGRAM_ENABLED:
         try:
             import asyncio
             from utils.telegram_notifier import get_notifier
+
             notifier = get_notifier()
-            payload  = {
-                "bias":      checks["gap"]["direction"],
-                "india_vix": checks["vix"]["vix"],
-                "gap_pct":   checks["gap"]["gap_pct"],
-                "posture":   posture,
+            payload = {
+                "bias": checks["gap"]["direction"],
+                "gap_pct": checks["gap"]["gap_pct"],
+                "posture": posture,
+                "instrument": active_sym,
             }
             asyncio.run(notifier.send_premarket_brief(payload))
             print("  Telegram: morning brief sent ✅")

@@ -74,7 +74,7 @@ except ImportError:
         or (BACKTEST_TELEGRAM_BOT_TOKEN and BACKTEST_TELEGRAM_CHAT_ID)
     )
     TRADING_MODE       = os.getenv("TRADING_MODE", "AUTO")
-    INSTRUMENT         = "NIFTY"
+    INSTRUMENT         = os.getenv("INSTRUMENT", "SILVERM")
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
@@ -90,12 +90,14 @@ class TelegramNotifier:
     def __init__(self) -> None:
         generic_token = os.getenv("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN)
         generic_chat = os.getenv("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID)
+        self._generic_token = generic_token
+        self._generic_chat  = generic_chat
         self._live_token = os.getenv("LIVE_TELEGRAM_BOT_TOKEN", LIVE_TELEGRAM_BOT_TOKEN or generic_token)
         self._live_chat  = os.getenv("LIVE_TELEGRAM_CHAT_ID", LIVE_TELEGRAM_CHAT_ID or generic_chat)
         self._bt_token   = os.getenv("BACKTEST_TELEGRAM_BOT_TOKEN", BACKTEST_TELEGRAM_BOT_TOKEN)
         self._bt_chat    = os.getenv("BACKTEST_TELEGRAM_CHAT_ID", BACKTEST_TELEGRAM_CHAT_ID)
         self._enabled  = bool(
-            (self._live_token and self._live_chat)
+            (self._live_token and (self._live_chat or self._generic_chat))
             or (self._bt_token and self._bt_chat)
             or TELEGRAM_ENABLED
         )
@@ -190,7 +192,7 @@ class TelegramNotifier:
             or payload.get("total_invested")
             or (prem * qty)
         )
-        max_margin_budget = float(payload.get("max_margin_budget", 30000.0))
+        max_margin_budget = float(payload.get("max_margin_budget", 40000.0))
         margin_used = min(margin_used, max_margin_budget)
 
         # ML metrics
@@ -308,8 +310,8 @@ class TelegramNotifier:
         charges   = float(payload.get("fees_inr", payload.get("total_charges", 0.0)))
         net_inr   = float(payload.get("net_pnl_inr", payload.get("realized_pnl", gross_inr - charges)))
         margin    = float(payload.get("margin_used_inr", payload.get("total_invested", max(c_entry * qty, 1.0))))
-        max_margin_budget = float(payload.get("max_margin_budget", 30000.0))
-        margin    = min(margin, max_margin_budget)
+        max_margin_budget = float(payload.get("max_margin_budget", 40000.0))
+        margin = min(margin, max_margin_budget)
 
         net_roi_pct = round((net_inr / max(margin, 1.0)) * 100.0, 2) if margin > 0 else 0.0
 
@@ -406,7 +408,7 @@ class TelegramNotifier:
         capital      = float(summary.get("capital", 200000.0))
         cap_return   = float(summary.get("capital_return_pct", (net / max(1.0, capital)) * 100.0))
         margin_used  = float(summary.get("peak_margin_used", 25666.0))
-        budget_cap   = float(summary.get("max_margin_budget", 30000.0))
+        budget_cap   = float(summary.get("max_margin_budget", 40000.0))
         max_dd       = float(summary.get("max_dd", 0.0))
         max_dd_pct   = float(summary.get("max_dd_pct", (max_dd / max(1.0, capital)) * 100.0))
 
@@ -523,7 +525,7 @@ class TelegramNotifier:
         net          = float(summary.get("net_pnl", 0))
         today        = datetime.now(IST).strftime("%d %b %Y")
         total_fund   = float(summary.get("total_fund", 200000))
-        deployed     = float(summary.get("deployed_capital", 30000))
+        deployed     = float(summary.get("deployed_capital", 40000))
         equity       = float(summary.get("ending_equity", total_fund) or total_fund)
         dd           = float(summary.get("drawdown_pct", 0))
         signal       = summary.get("risk_signal", "NORMAL")
@@ -555,15 +557,12 @@ class TelegramNotifier:
 
     async def send_premarket_brief(self, payload: dict) -> None:
         """Morning market brief before trading starts."""
-        bias     = payload.get("bias", "NEUTRAL")
-        raw_vix  = float(payload.get("india_vix") or payload.get("vix") or 0.0)
-        vix      = raw_vix if 8.0 <= raw_vix <= 80.0 else 14.0
-        vix_note = "" if 8.0 <= raw_vix <= 80.0 else " fallback"
-        gap_pct  = float(payload.get("gap_pct", 0))
-        sgx      = payload.get("sgx_bias", "—")
+        global_bias = payload.get("global_bias") or payload.get("comex_bias") or payload.get("sgx_bias") or "—"
         mode     = TRADING_MODE
+        sym      = str(payload.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+        bias     = str(payload.get("bias", "NEUTRAL")).upper()
+        gap_pct  = float(payload.get("gap_pct", 0.0) or 0.0)
 
-        vix_tag  = "🔴 HIGH" if vix > 22 else "🟡 ELEVATED" if vix > 17 else "🟢 LOW"
         gap_tag  = f"{gap_pct:+.2f}% {'⬆️' if gap_pct > 0 else '⬇️'}" if abs(gap_pct) > 0.1 else "Flat"
         bias_tag = {"BULLISH": "🐂 BULLISH", "BEARISH": "🐻 BEARISH",
                     "NEUTRAL": "➡️ NEUTRAL"}.get(bias, bias)
@@ -572,16 +571,16 @@ class TelegramNotifier:
             f"🌅 *MCXForge Daily Brief*\n"
             f"📅 {datetime.now(IST).strftime('%d %b %Y')}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 Commodity: SILVERM\n"
+            f"🎯 Commodity: *{sym}*\n"
             f"🌐 Bias:    {bias_tag}\n"
             f"📊 Gap:     {gap_tag}\n"
-            f"😰 VIX:     {vix:.1f}  {vix_tag}{vix_note}\n"
-            f"🌏 Global:  {sgx}\n"
+            f"🌏 Global:  {global_bias}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚙️ Mode:    {mode} (Simulated Paper Execution)\n"
             f"🕐 Hours:   09:00 – 23:30 IST\n"
-            f"🌙 Evening: 17:00 – 23:00 IST (🔥 Primary Trading Window)\n"
-            f"💡 Note:    Mostly trades in {mode} mode in Evening Session"
+            f"🌅 Morning: 09:00 – 17:00 IST (Active Trading)\n"
+            f"🌙 Evening: 17:00 – 23:00 IST (Peak Commodity Liquidity)\n"
+            f"💡 Note:    Full-day trading active in {mode} mode across Morning & Evening"
         )
         await self._send(msg, target=self._payload_target(payload))
 
@@ -602,9 +601,19 @@ class TelegramNotifier:
     ) -> bool:
         """Synchronous helper for send_text."""
         try:
-            return asyncio.run(self.send_text(message, target=target, parse_mode=parse_mode))
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, self.send_text(message, target=target, parse_mode=parse_mode))
+                    return bool(future.result())
+            else:
+                return bool(loop.run_until_complete(self.send_text(message, target=target, parse_mode=parse_mode)))
         except Exception:
-            return False
+            try:
+                return bool(asyncio.run(self.send_text(message, target=target, parse_mode=parse_mode)))
+            except Exception:
+                return False
 
     # ── INTERNAL ──────────────────────────────────────────────────────────────
 
@@ -623,8 +632,8 @@ class TelegramNotifier:
             except Exception:
                 pass
             return False
-        token, chat_id = self._active_credentials(target=target)
-        if not token or not chat_id:
+        token, chat_ids = self._active_credentials(target=target)
+        if not token or not chat_ids:
             try:
                 from loguru import logger
                 logger.warning(f"[TelegramNotifier] skipped: missing credentials for target={route}")
@@ -633,90 +642,109 @@ class TelegramNotifier:
             return False
 
         import hashlib, time
-        cache_key = f"{chat_id}:{hashlib.sha256(text.strip().encode('utf-8')).hexdigest()}"
         now = time.time()
         TelegramNotifier._sent_cache = {k: ts for k, ts in TelegramNotifier._sent_cache.items() if now - ts < 60.0}
-        if route != "BACKTEST" and cache_key in TelegramNotifier._sent_cache:
-            if now - TelegramNotifier._sent_cache[cache_key] < 30.0:
-                try:
-                    from loguru import logger
-                    logger.info(f"[TelegramNotifier] Suppressed duplicate Telegram message within 30s | target={route}")
-                except Exception:
-                    pass
-                return True
-        TelegramNotifier._sent_cache[cache_key] = now
-        url = TELEGRAM_API.format(token=token)
-        data = {
-            "chat_id": chat_id,
-            "text": text,
-        }
-        if parse_mode:
-            data["parse_mode"] = parse_mode
 
         transport = os.getenv("TELEGRAM_TRANSPORT", "auto").strip().lower()
         transports = [transport] if transport in {"aiohttp", "requests", "curl"} else ["aiohttp", "requests", "curl"]
-        last_error = ""
+        url = TELEGRAM_API.format(token=token)
+        any_success = False
 
-        for transport_name in transports:
-            try:
-                if transport_name == "aiohttp":
-                    ok, last_error = await self._send_aiohttp(url, data)
-                elif transport_name == "requests":
-                    ok, last_error = self._send_requests(url, data)
-                elif transport_name == "curl":
-                    ok, last_error = self._send_curl(url, data)
-                else:
-                    continue
-                if ok:
+        for chat_id in chat_ids:
+            cache_key = f"{chat_id}:{hashlib.sha256(text.strip().encode('utf-8')).hexdigest()}"
+            if route != "BACKTEST" and cache_key in TelegramNotifier._sent_cache:
+                if now - TelegramNotifier._sent_cache[cache_key] < 30.0:
                     try:
                         from loguru import logger
-                        logger.info(f"[TelegramNotifier] target={route} sent via {transport_name}")
+                        logger.info(f"[TelegramNotifier] Suppressed duplicate Telegram message within 30s | chat={chat_id} target={route}")
                     except Exception:
                         pass
-                    return True
-            except Exception as e:
-                last_error = f"{type(e).__name__}: {self._safe_error(e)}"
+                    any_success = True
+                    continue
+            TelegramNotifier._sent_cache[cache_key] = now
+            data = {
+                "chat_id": chat_id,
+                "text": text,
+            }
+            if parse_mode:
+                data["parse_mode"] = parse_mode
 
-        # If sending with parse_mode failed (e.g. 400 bad entity parse), retry as plain text
-        if parse_mode and "parse_mode" in data:
-            data_plain = dict(data)
-            data_plain.pop("parse_mode", None)
+            sent_this = False
+            last_error = ""
+
             for transport_name in transports:
                 try:
                     if transport_name == "aiohttp":
-                        ok, _ = await self._send_aiohttp(url, data_plain)
+                        ok, last_error = await self._send_aiohttp(url, data)
                     elif transport_name == "requests":
-                        ok, _ = self._send_requests(url, data_plain)
+                        ok, last_error = self._send_requests(url, data)
                     elif transport_name == "curl":
-                        ok, _ = self._send_curl(url, data_plain)
+                        ok, last_error = self._send_curl(url, data)
                     else:
                         continue
                     if ok:
+                        sent_this = True
+                        any_success = True
                         try:
                             from loguru import logger
-                            logger.info(f"[TelegramNotifier] target={route} sent as plain text fallback via {transport_name}")
+                            logger.info(f"[TelegramNotifier] chat={chat_id} target={route} sent via {transport_name}")
                         except Exception:
                             pass
-                        return True
+                        break
+                except Exception as e:
+                    last_error = f"{type(e).__name__}: {self._safe_error(e)}"
+
+            # If sending with parse_mode failed (e.g. 400 bad entity parse), retry as plain text
+            if not sent_this and parse_mode and "parse_mode" in data:
+                data_plain = dict(data)
+                data_plain.pop("parse_mode", None)
+                for transport_name in transports:
+                    try:
+                        if transport_name == "aiohttp":
+                            ok, _ = await self._send_aiohttp(url, data_plain)
+                        elif transport_name == "requests":
+                            ok, _ = self._send_requests(url, data_plain)
+                        elif transport_name == "curl":
+                            ok, _ = self._send_curl(url, data_plain)
+                        else:
+                            continue
+                        if ok:
+                            sent_this = True
+                            any_success = True
+                            try:
+                                from loguru import logger
+                                logger.info(f"[TelegramNotifier] chat={chat_id} target={route} sent as plain text fallback via {transport_name}")
+                            except Exception:
+                                pass
+                            break
+                    except Exception:
+                        pass
+
+            if not sent_this:
+                try:
+                    from loguru import logger
+                    logger.warning(f"[TelegramNotifier] chat={chat_id} target={route} send failed: {last_error}")
                 except Exception:
                     pass
 
-        try:
-            from loguru import logger
-            logger.warning(f"[TelegramNotifier] target={route} send failed: {last_error}")
-        except Exception:
-            pass
-        return False
+        return any_success
 
-    def _active_credentials(self, target: str | None = None) -> tuple[str, str]:
+    def _active_credentials(self, target: str | None = None) -> tuple[str, list[str]]:
         mode = str(
             target
             or os.getenv("TELEGRAM_TARGET")
             or os.getenv("TRADING_MODE", TRADING_MODE)
         ).upper()
         if "BACKTEST" in mode or mode in ("BT", "TEST"):
-            return self._bt_token, self._bt_chat
-        return self._live_token, self._live_chat
+            chats = [self._bt_chat] if self._bt_chat else ([self._generic_chat] if self._generic_chat else [])
+            token = self._bt_token or self._live_token or self._generic_token
+            return token, chats
+
+        # Live / Observe mode: send to channel LIVE_TELEGRAM_CHAT_ID only
+        live_chat = self._live_chat or self._generic_chat
+        chats = [live_chat] if live_chat else []
+        token = self._live_token or self._generic_token
+        return token, chats
 
     async def _send_aiohttp(self, url: str, data: dict) -> tuple[bool, str]:
         try:

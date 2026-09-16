@@ -102,7 +102,9 @@ STRATEGY_CATEGORY_MAPPING: dict[str, str] = {
     "EMASlope": "trend / momentum",
     "HeikinAshi": "trend / momentum",
     "StochRSI": "trend / momentum",
-    "VWAPExtreme": "trend / momentum",
+    "TrendFollowing": "trend / momentum",
+    "MACrossover": "trend / momentum",
+    "MomentumVolumeBreakout": "trend / momentum",
 
     # structure / SMC
     "FVG": "structure / SMC",
@@ -112,23 +114,33 @@ STRATEGY_CATEGORY_MAPPING: dict[str, str] = {
     "AMD": "structure / SMC",
     "SMC": "structure / SMC",
     "VolumeProfile": "structure / SMC",
-    "ValueArea": "structure / SMC",
     "ElliottWave": "structure / SMC",
 
     # level / breakout
-    "ORB": "level / breakout",
+    "OpeningRangeBreakout": "level / breakout",
     "CPR": "level / breakout",
     "GapDirection": "level / breakout",
     "GapMomentum": "level / breakout",
-    "OpeningRangeBias": "level / breakout",
+    "DonchianBreakout": "level / breakout",
+    "TimeOfDaySeasonality": "level / breakout",
+    "CalendarSeasonality": "level / breakout",
+
+    # mean reversion
+    "VWAPMeanReversion": "mean reversion",
+    "BBMeanReversion": "mean reversion",
+    "RSIDivergence": "mean reversion",
+    "RSI2MeanReversion": "mean reversion",
 
     # volatility
-    "BBSqueeze": "volatility",
+    "VolatilityBreakout": "volatility",
     "RangeSpread": "volatility",
     "SqueezeMomentum": "volatility",
 
     # flow / external
     "OIAnalysis": "flow / external",
+    "GoldSilverPairs": "flow / external",
+    "OrderFlowDelta": "flow / external",
+    "TermStructure": "flow / external",
 }
 
 try:
@@ -250,8 +262,6 @@ from agents_code.agent2_strategy.indicator_cache import IndicatorCache
 from agents_code.agent2_strategy.setup_engine import TradeSetup, TradeSetupEngine
 from agents_code.agent2_strategy.s1_supertrend_rsi import SuperTrendRSI
 from agents_code.agent2_strategy.s2_vwap_ema import VWAPEMACross
-from agents_code.agent2_strategy.s3_orb import ORBStrategy
-from agents_code.agent2_strategy.s4_bb_squeeze import BBSqueeze
 from agents_code.agent2_strategy.s5_adx_psar import ADXParabolicSAR
 from agents_code.agent2_strategy.s6_fvg import FVGStrategy
 from agents_code.agent2_strategy.s7_utbot import UTBotStrategy
@@ -269,7 +279,7 @@ from agents_code.agent2_strategy.s13_oi_analysis import (
 )
 from agents_code.agent2_strategy.s15_amd             import AMDStrategy
 from agents_code.agent2_strategy.s16_gap_direction   import GapDirectionStrategy
-from agents_code.agent2_strategy.s20_volume_profile  import VolumeProfileStrategy as ValueAreaStrategy
+from agents_code.agent2_strategy.s17_smc             import SMCStrategy
 from agents_code.agent2_strategy.s22_gap_momentum    import GapMomentumStrategy
 from agents_code.agent2_strategy.s23_adx_rising      import ADXRisingStrategy
 from agents_code.agent2_strategy.s24_range_spread    import RangeSpreadStrategy
@@ -277,11 +287,22 @@ from agents_code.agent2_strategy.s25_squeeze_momentum import SqueezeMomentumStra
 from agents_code.agent2_strategy.s26_stoch_rsi       import StochRSIStrategy
 from agents_code.agent2_strategy.s27_ema_slope       import EMASlopeStrategy
 from agents_code.agent2_strategy.s28_heikin_ashi     import HeikinAshiStrategy
-from agents_code.agent2_strategy.s29_vwap_extreme    import VWAPExtremeStrategy
-from agents_code.agent2_strategy.s31_opening_range_bias import OpeningRangeBiasStrategy
 from agents_code.agent2_strategy.s34_elliott_wave    import ElliottWaveStrategy
-from utils.instrument_selector import compute_atr
-from agents_code.agent2_strategy.s17_smc             import SMCStrategy            # NEW S17
+from core.strategies.trend_following import TrendFollowingStrategy
+from core.strategies.orb import OpeningRangeBreakoutStrategy
+from core.strategies.vwap_mean_reversion import VWAPMeanReversionStrategy
+from core.strategies.volatility_breakout import VolatilityBreakoutStrategy
+from core.strategies.donchian_breakout import DonchianBreakoutStrategy
+from core.strategies.bb_mean_reversion import BollingerBandMeanReversionStrategy
+from core.strategies.ma_crossover import MovingAverageCrossoverStrategy
+from core.strategies.rsi_divergence import RSIDivergenceStrategy
+from core.strategies.momentum_volume_breakout import MomentumVolumeBreakoutStrategy
+from core.strategies.gold_silver_pairs import GoldSilverPairsStrategy
+from core.strategies.order_flow_delta import OrderFlowDeltaStrategy
+from core.strategies.time_of_day_seasonality import TimeOfDaySeasonalityStrategy
+from core.strategies.rsi2_mean_reversion import RSI2MeanReversionStrategy
+from core.strategies.calendar_seasonality import CalendarSeasonalityStrategy
+from core.strategies.term_structure import TermStructureStrategy
 from utils.morning_bias import get_morning_bias_system
 from utils.pipeline_logging import log_pipeline_stage
 from utils.options_flow_detector import get_flow_detector
@@ -290,6 +311,7 @@ from utils.advanced_filters import (
     get_pf_gate,
 )
 from utils.market_microstructure_edges import get_microstructure
+from utils.option_utils import compute_atr
 from agents_code.agent9_regime.wyckoff_phase_detector import WyckoffResult
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -322,10 +344,26 @@ class WeightedVoteSummary:
 
 
 STRATEGY_REGISTRY: list[StrategyMeta] = [
+    # ── 15 Dedicated MCX Commodity Futures Strategies ──
+    StrategyMeta(TrendFollowingStrategy(), 30, False, False, "TrendFollowing", True),
+    StrategyMeta(OpeningRangeBreakoutStrategy(), 15, False, True, "OpeningRangeBreakout", True),
+    StrategyMeta(VWAPMeanReversionStrategy(), 20, False, False, "VWAPMeanReversion", True),
+    StrategyMeta(VolatilityBreakoutStrategy(), 20, False, False, "VolatilityBreakout", True),
+    StrategyMeta(DonchianBreakoutStrategy(), 25, False, False, "DonchianBreakout", True),
+    StrategyMeta(BollingerBandMeanReversionStrategy(), 20, False, False, "BBMeanReversion", True),
+    StrategyMeta(MovingAverageCrossoverStrategy(), 25, False, False, "MACrossover", True),
+    StrategyMeta(RSIDivergenceStrategy(), 30, False, False, "RSIDivergence", True),
+    StrategyMeta(MomentumVolumeBreakoutStrategy(), 20, False, False, "MomentumVolumeBreakout", True),
+    StrategyMeta(GoldSilverPairsStrategy(), 20, False, False, "GoldSilverPairs", True),
+    StrategyMeta(OrderFlowDeltaStrategy(), 20, False, False, "OrderFlowDelta", True),
+    StrategyMeta(TimeOfDaySeasonalityStrategy(), 10, False, False, "TimeOfDaySeasonality", True),
+    StrategyMeta(RSI2MeanReversionStrategy(), 20, False, False, "RSI2MeanReversion", True),
+    StrategyMeta(CalendarSeasonalityStrategy(), 10, False, False, "CalendarSeasonality", True),
+    StrategyMeta(TermStructureStrategy(), 10, False, False, "TermStructure", True),
+
+    # ── 22 Canonical Core Strategies (Ported & Active) ──
     StrategyMeta(SuperTrendRSI(), S1_MIN_DF_LEN, False, False, "SuperTrend+RSI"),
     StrategyMeta(VWAPEMACross(), S2_MIN_DF_LEN, False, False, "VWAP+EMA"),
-    StrategyMeta(ORBStrategy(), S3_MIN_DF_LEN, False, True, "ORB", True),
-    StrategyMeta(BBSqueeze(), max(S4_BB_LENGTH, S4_BBW_MA_PERIOD), False, False, "BBSqueeze"),
     StrategyMeta(ADXParabolicSAR(), S5_MIN_DF_LEN, False, False, "ADX+PSAR"),
     StrategyMeta(FVGStrategy(), S6_MIN_DF_LEN, False, False, "FVG", True),
     StrategyMeta(UTBotStrategy(), S7_MIN_DF_LEN_RUNNER, False, False, "UTBot", True),
@@ -334,13 +372,10 @@ STRATEGY_REGISTRY: list[StrategyMeta] = [
     StrategyMeta(VolumeProfileStrategy(), S10_MIN_DF_LEN, False, False, "VolumeProfile", True),
     StrategyMeta(LiquiditySweepStrategy(), S11_MIN_DF_LEN, False, False, "LiqSweep", True),
     StrategyMeta(PriceActionStrategy(), S12_MIN_DF_LEN, False, False, "PriceAction", True),
-    # OIAnalysis can use live recorder OI/IV even when index/option volume
-    # enrichment has not warmed up yet.
     StrategyMeta(OIAnalysisStrategy(), S13_MIN_DF_LEN_RUNNER, False, False, "OIAnalysis"),
     StrategyMeta(AMDStrategy(), S15_MIN_DF_LEN, False, False, "AMD", True),
     StrategyMeta(GapDirectionStrategy(), S16_MIN_DF_LEN, False, False, "GapDirection", True),
     StrategyMeta(SMCStrategy(), 50, False, False, "SMC", True),
-    StrategyMeta(ValueAreaStrategy(), 30, False, False, "ValueArea", True),
     StrategyMeta(GapMomentumStrategy(), 20, False, False, "GapMomentum", True),
     StrategyMeta(ADXRisingStrategy(), 25, False, False, "ADXRising"),
     StrategyMeta(RangeSpreadStrategy(), 20, False, False, "RangeSpread", True),
@@ -348,8 +383,6 @@ STRATEGY_REGISTRY: list[StrategyMeta] = [
     StrategyMeta(StochRSIStrategy(), S26_MIN_CANDLES, False, False, "StochRSI"),
     StrategyMeta(EMASlopeStrategy(), S27_MIN_CANDLES, False, False, "EMASlope"),
     StrategyMeta(HeikinAshiStrategy(), S28_MIN_CANDLES, False, False, "HeikinAshi", True),
-    StrategyMeta(VWAPExtremeStrategy(), S29_MIN_CANDLES, False, False, "VWAPExtreme", True),
-    StrategyMeta(OpeningRangeBiasStrategy(), S31_MIN_CANDLES, False, True, "OpeningRangeBias", True),
     StrategyMeta(ElliottWaveStrategy(), 40, False, False, "ElliottWave", True),
 ]
 ALL_STRATEGY_NAMES = [meta.name for meta in STRATEGY_REGISTRY]
@@ -512,7 +545,13 @@ def _run_strategy_sync(
         try:
             result = meta.instance.evaluate(df, orb_high, orb_low, cache=cache, **context)
         except TypeError as e:
-            if "got an unexpected keyword argument 'cache'" in str(e):
+            err_str = str(e)
+            if "positional argument" in err_str:
+                try:
+                    result = meta.instance.evaluate(df, orb_high=orb_high, orb_low=orb_low, cache=cache, **context)
+                except TypeError:
+                    result = meta.instance.evaluate(df, **context)
+            elif "got an unexpected keyword argument 'cache'" in err_str:
                 # Strategy doesn't accept cache kwarg yet — backward compatible
                 try:
                     result = meta.instance.evaluate(df, orb_high, orb_low, **context)
@@ -521,7 +560,7 @@ def _run_strategy_sync(
                         result = meta.instance.evaluate(df, orb_high, orb_low)
                     else:
                         raise
-            elif "got an unexpected keyword argument" in str(e):
+            elif "got an unexpected keyword argument" in err_str:
                 # Legacy strategies without **kwargs.
                 result = meta.instance.evaluate(df, orb_high, orb_low)
             else:
@@ -559,9 +598,13 @@ def _run_strategy_sync(
 def _has_meaningful_volume(df: pd.DataFrame, lookback: int) -> bool:
     if df.empty:
         return False
-    # If in backtest, relax volume requirement as Nifty index often has 0 volume in free data
-    if os.getenv("TRADING_MODE", "OBSERVE") == "BACKTEST":
+    # Relax volume requirement in OBSERVE, PAPER, and BACKTEST modes so commodity feeds without tick volume don't block strategies
+    mode = str(os.getenv("TRADING_MODE", "OBSERVE")).upper()
+    if mode in ("BACKTEST", "OBSERVE", "PAPER"):
         return True
+    if str(os.getenv("ALLOW_ZERO_VOLUME_STRATEGIES", "true")).lower() in ("1", "true", "yes"):
+        return True
+
     volume_col = "volume"
     if "volume" not in df.columns or not (pd.to_numeric(df["volume"], errors="coerce").fillna(0.0) > 0).any():
         option_volume_cols = [
@@ -569,15 +612,8 @@ def _has_meaningful_volume(df: pd.DataFrame, lookback: int) -> bool:
             if col in df.columns
         ]
         if not option_volume_cols:
-            return False
-        option_volume = df[option_volume_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
-        # Live broker/index feeds can provide candles and option-chain context
-        # while reporting zero volume. Treat the feature columns as available
-        # so volume-aware strategies can evaluate instead of being disabled.
-        if os.getenv("TRADING_MODE", "OBSERVE") != "BACKTEST":
             return True
-        window = option_volume.tail(max(1, min(int(lookback or 1), len(df))))
-        return bool((window > 0).any())
+        return True
     window = df[volume_col].tail(max(1, min(int(lookback or 1), len(df))))
     volume = pd.to_numeric(window, errors="coerce").fillna(0.0)
     return bool((volume > 0).any())
@@ -683,6 +719,7 @@ class StrategyAgent:
         self.bus.subscribe(Topic.SYSTEM_STATUS,   self._on_system_status)
         self.bus.subscribe(Topic.SYSTEM_RESET,    self._on_system_reset)
         self.bus.subscribe(Topic.PREMARKET_BIAS,  self._on_premarket_bias)
+        self.bus.subscribe(Topic.EOD_REPORT_READY, self._on_eod_report)
         live_n = sum(1 for s in STRATEGY_REGISTRY if not s.requires_live_broker)
         total_strategies = len(self._strategy_health)
         logger.info(
@@ -700,6 +737,10 @@ class StrategyAgent:
             )
         logger.info(f"[{self.NAME}] Registered. Strategies: {total_strategies}")
 
+    async def _on_eod_report(self, msg: Message) -> None:
+        logger.info(f"[{self.NAME}] EOD report received — resetting strategy health for day close")
+        self.reset_daily_health(status="EOD_CLOSED")
+
     def strategy_names(self) -> list[str]:
         return list(self._strategy_health.keys())
 
@@ -708,21 +749,50 @@ class StrategyAgent:
         self._is_backtest_mode = is_backtest
         logger.info(f"[{self.NAME}] Mode={'BACKTEST' if is_backtest else 'LIVE'}")
 
+    def reset_daily_health(self, status: str = "ACTIVE") -> None:
+        """Reset daily scans, votes, and health metrics after day close or for a new day."""
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+        self._scan_count = 0
+        self._strategy_health = {
+            k: {"skipped": 0, "running": 0, "errors": 0, "voted": 0}
+            for k in self._strategy_health
+        }
+        try:
+            p = Path("state/strategy_health.json")
+            p.parent.mkdir(parents=True, exist_ok=True)
+            status_payload = {
+                "date": today_str,
+                "status": status,
+                "timestamp": datetime.now(IST).isoformat(),
+                "scans": 0,
+                "strategies": {
+                    k: {"evaluated": 0, "voted": 0, "skipped": 0, "errors": 0}
+                    for k in self._strategy_health
+                },
+            }
+            p.write_text(json.dumps(status_payload, indent=2))
+        except Exception:
+            pass
+
     def strategy_health_status(self) -> dict:
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
         persisted_strategies = {}
         persisted_scans = 0
         try:
             p = Path("state/strategy_health.json")
             if p.exists():
                 loaded = json.loads(p.read_text())
-                persisted_scans = int(loaded.get("scans", 0))
-                for name, s in (loaded.get("strategies", {}) or {}).items():
-                    persisted_strategies[name] = {
-                        "evaluated": int(s.get("evaluated", 0)),
-                        "voted": int(s.get("voted", 0)),
-                        "skipped": int(s.get("skipped", 0)),
-                        "errors": int(s.get("errors", 0)),
-                    }
+                persisted_date = str(loaded.get("date", ""))[:10]
+                persisted_status = loaded.get("status", "")
+                if persisted_date == today_str and persisted_status != "EOD_CLOSED":
+                    persisted_scans = int(loaded.get("scans", 0))
+                    for name, s in (loaded.get("strategies", {}) or {}).items():
+                        persisted_strategies[name] = {
+                            "evaluated": int(s.get("evaluated", 0)),
+                            "voted": int(s.get("voted", 0)),
+                            "skipped": int(s.get("skipped", 0)),
+                            "errors": int(s.get("errors", 0)),
+                        }
         except Exception:
             pass
 
@@ -737,6 +807,8 @@ class StrategyAgent:
             }
 
         status = {
+            "date": today_str,
+            "timestamp": datetime.now(IST).isoformat(),
             "scans": max(int(self._scan_count), persisted_scans),
             "strategies": merged_strategies,
         }
@@ -997,6 +1069,8 @@ class StrategyAgent:
         df = self._with_effective_volume(df)
 
         ltp = float(df["close"].iloc[-1])
+        current_symbol = str(msg.payload.get("symbol") or os.getenv("INSTRUMENT", "SILVERM")).upper()
+        self._active_symbol = current_symbol
         india_vix = float(regime_details.get("vix", regime_details.get("india_vix", msg.payload.get("vix", 18.0))) or 18.0)
         banknifty_spot = float(
             msg.payload.get("banknifty_ltp")
@@ -1092,11 +1166,20 @@ class StrategyAgent:
         )
         adaptive_backtest_disabled = self._is_backtest and not BACKTEST_ENABLE_ADAPTIVE_GATES
         adaptive_live_disabled = (not self._is_backtest) and not LIVE_ENABLE_ADAPTIVE_GATES
-        adaptive_min_votes = int(adaptive_gates.min_votes or MIN_STRATEGY_VOTES)
+        active_sym = str(getattr(self, "_active_symbol", None) or os.getenv("INSTRUMENT", "SILVERM")).upper()
+        base_min_votes = MIN_STRATEGY_VOTES
+        try:
+            from instruments.registry import get_instrument_strategy_config
+            inst_cfg = get_instrument_strategy_config(active_sym) or {}
+            if inst_cfg.get("min_votes"):
+                base_min_votes = int(inst_cfg["min_votes"])
+        except Exception:
+            pass
+        adaptive_min_votes = max(4, int(adaptive_gates.min_votes or base_min_votes))
         adaptive_loosened = bool(adaptive_gates.loosened)
         adaptive_reason = str(adaptive_gates.reason or "")
         if adaptive_backtest_disabled or adaptive_live_disabled:
-            adaptive_min_votes = MIN_STRATEGY_VOTES
+            adaptive_min_votes = max(4, base_min_votes)
             adaptive_loosened = False
             disabled_reason = (
                 "backtest_adaptive_disabled"
@@ -1225,8 +1308,8 @@ class StrategyAgent:
             "hybrid_5m": hybrid_5m,
             "hybrid_5m_anchor": hybrid_5m_anchor,
             "market_ts": current_ts,
-            "symbol": "NIFTY",
-            "instrument": "NIFTY",
+            "symbol": current_symbol,
+            "instrument": current_symbol,
         }
         flow_signal = None
         try:
@@ -1309,7 +1392,7 @@ class StrategyAgent:
                         "action": score.gate_action,
                         "conf_boost": score.conf_boost,
                     }
-                    adaptive_min_votes = min(adaptive_min_votes, int(score.vote_threshold))
+                    adaptive_min_votes = max(4, min(adaptive_min_votes, int(score.vote_threshold)))
                     pf_trusted.append(str(result.get("name", "") or ""))
             if pf_trusted:
                 adaptive_reason = f"{adaptive_reason}; pf_trust={','.join(sorted(pf_trusted))}".strip("; ")
@@ -1665,6 +1748,16 @@ class StrategyAgent:
             )
             return
 
+        # HARD CONSENSUS FLOOR: Require at least 4 agreeing strategy votes.
+        # If fewer than 4 strategies agree, treat strictly as sub-threshold noise (no signals, no rejections).
+        if len(winning) < 4:
+            logger.debug(
+                f"[{self.NAME}] Sub-threshold consensus ({len(winning)} votes < 4 required) | "
+                f"market_ts={current_ts.strftime('%Y-%m-%d %H:%M IST')} | "
+                f"winning={[r['name'] for r in winning]}"
+            )
+            return
+
         best_conf  = max(r["confidence"] for r in winning)
         early_trigger = False
         adaptive_single_vote = (
@@ -1672,7 +1765,25 @@ class StrategyAgent:
             and len(winning) >= adaptive_min_votes
         )
         if len(winning) < adaptive_min_votes:
+            min_rejection_votes = int(os.getenv("MIN_REJECTION_REPORT_VOTES", str(adaptive_min_votes)))
             if not ALLOW_SUBMIN_VOTE_EARLY_TRIGGER:
+                if len(winning) >= min_rejection_votes and min_rejection_votes > 0:
+                    await self._publish_runner_rejection(
+                        current_ts=current_ts,
+                        direction=direction,
+                        confidence=float(best_conf),
+                        votes=len(winning),
+                        ltp=ltp,
+                        regime=signal_regime,
+                        winning=winning,
+                        setup=setup,
+                        weighted_score=float(winning_summary.weighted_score),
+                        rejection_reason=(
+                            f"Runner gate: insufficient votes ({len(winning)} < {adaptive_min_votes} needed) | "
+                            f"ws={winning_summary.weighted_score:.2f}"
+                        ),
+                        extra_meta={"runner_gate": "insufficient_votes"},
+                    )
                 return
             early_trigger = self._should_allow_early_trigger(
                 votes=len(winning),
@@ -1704,6 +1815,23 @@ class StrategyAgent:
                         f"ws={put_summary.weighted_score:.2f} | "
                         f"need={adaptive_min_votes} | adaptive={adaptive_reason}"
                     )
+                if len(winning) >= min_rejection_votes and min_rejection_votes > 0:
+                    await self._publish_runner_rejection(
+                        current_ts=current_ts,
+                        direction=direction,
+                        confidence=float(best_conf),
+                        votes=len(winning),
+                        ltp=ltp,
+                        regime=signal_regime,
+                        winning=winning,
+                        setup=setup,
+                        weighted_score=float(winning_summary.weighted_score),
+                        rejection_reason=(
+                            f"Runner gate: insufficient votes ({len(winning)} < {adaptive_min_votes} needed) | "
+                            f"ws={winning_summary.weighted_score:.2f}"
+                        ),
+                        extra_meta={"runner_gate": "insufficient_votes"},
+                    )
                 return
             logger.info(
                 f"[{self.NAME}] Early trigger enabled | "
@@ -1734,7 +1862,7 @@ class StrategyAgent:
         )
         confidence = round(min(RUNNER_CONF_MAX, max(0.0, best_conf + vote_bonus + micro_conf_adj)), 4)
 
-        signal_vote_count = max(len(winning), hero_zero_internal_votes if hero_zero_standalone else 0)
+        signal_vote_count = len(winning)
         winning_strat_names = [r["name"] for r in winning]
         indep_cat_count, cat_breakdown, distinct_cats = self._get_category_votes(winning_strat_names)
 
@@ -1804,7 +1932,7 @@ class StrategyAgent:
             try:
                 sig_payload = {
                     "signal_id": signal_id_str,
-                    "symbol": "NIFTY",
+                    "symbol": current_symbol,
                     "direction": direction.value,
                     "nifty_ltp": ltp,
                     "ema20": float(df.iloc[-1].get("ema20", ltp - 15.4 if direction == Direction.BUY_CALL else ltp + 15.4)),
@@ -1837,7 +1965,7 @@ class StrategyAgent:
         )
 
         signal = RawSignal(
-            symbol           = "NIFTY",
+            symbol           = current_symbol,
             direction        = direction,
             confidence       = confidence,
             votes            = signal_vote_count,
@@ -2330,7 +2458,8 @@ class StrategyAgent:
                 f"[{self.NAME}] Midday vote_aligned blocked | market_ts={current_ts.strftime('%H:%M')} | "
                 f"votes={len(winning)} | setup_strength={float(setup.setup_strength):.2f}"
             )
-            if len(winning) >= MIN_STRATEGY_VOTES:
+            min_rejection_votes = int(os.getenv("MIN_REJECTION_REPORT_VOTES", "2"))
+            if len(winning) >= min_rejection_votes:
                 await self._publish_runner_rejection(
                     current_ts=current_ts,
                     direction=direction,
@@ -2370,7 +2499,8 @@ class StrategyAgent:
                 f"setup={float(setup.setup_strength):.2f} conf={float(confidence):.2f} "
                 f"votes={len(winning)} ws={float(winning_summary.weighted_score):.2f}"
             )
-            if len(winning) >= MIN_STRATEGY_VOTES:
+            min_rejection_votes = int(os.getenv("MIN_REJECTION_REPORT_VOTES", "2"))
+            if len(winning) >= min_rejection_votes:
                 await self._publish_runner_rejection(
                     current_ts=current_ts,
                     direction=direction,
@@ -2497,12 +2627,19 @@ class StrategyAgent:
         rsi_14_val = float(market_ctx.get("rsi_14", 50.0) or 50.0)
         rsi_exhausted = False
         rsi_reason = ""
-        if direction == Direction.BUY_PUT and rsi_14_val < 28.0:
-            rsi_exhausted = True
-            rsi_reason = f"RSI oversold exhaustion (RSI={rsi_14_val:.1f} < 28.0)"
-        elif direction == Direction.BUY_CALL and rsi_14_val > 72.0:
-            rsi_exhausted = True
-            rsi_reason = f"RSI overbought exhaustion (RSI={rsi_14_val:.1f} > 72.0)"
+        # High-conviction momentum exemption: In trending markets with strong strategy consensus,
+        # elevated RSI represents institutional acceleration rather than exhaustion.
+        is_momentum_breakout = (
+            (signal_regime == Regime.TRENDING or getattr(signal_regime, "value", str(signal_regime)).upper() in {"TRENDING", "TREND"})
+            and (len(winning) >= 5 or float(setup.setup_strength or 0.0) >= 0.75 or float(confidence or 0.0) >= 0.90)
+        )
+        if not is_momentum_breakout:
+            if direction == Direction.BUY_PUT and rsi_14_val < 28.0:
+                rsi_exhausted = True
+                rsi_reason = f"RSI oversold exhaustion (RSI={rsi_14_val:.1f} < 28.0)"
+            elif direction == Direction.BUY_CALL and rsi_14_val > 72.0:
+                rsi_exhausted = True
+                rsi_reason = f"RSI overbought exhaustion (RSI={rsi_14_val:.1f} > 72.0)"
 
         if rsi_exhausted:
             logger.info(
@@ -2587,13 +2724,20 @@ class StrategyAgent:
 
             anchors = {"VolumeProfile", "RangeSpread", "FVG", "ElliottWave", "ORB", "CPR", "ValueArea"}
             has_anchor = bool(strat_names.intersection(anchors))
+            strong_confluence = (
+                len(winning) >= 5
+                or float(setup.setup_strength or 0.0) >= 0.75
+                or float(confidence or 0.0) >= 0.88
+                or signal_regime == Regime.TRENDING
+                or getattr(signal_regime, "value", str(signal_regime)).upper() in {"TRENDING", "TREND"}
+            )
 
             rejected_reason = None
             if 10.0 <= now_tod < 11.5 and not has_anchor and len(winning) < 5:
                 rejected_reason = f"morning_trap_low_votes: {len(winning)} < 5 at {now_hhmm}"
-            elif not has_anchor and len(winning) < 5:
+            elif not has_anchor and len(winning) < 5 and not strong_confluence:
                 rejected_reason = "missing_structural_anchor: require >= 5 votes"
-            elif "ADX+PSAR" in strat_names and not has_anchor:
+            elif "ADX+PSAR" in strat_names and not has_anchor and not strong_confluence:
                 rejected_reason = "toxic_pair_no_anchor: ADX+PSAR without structural lead"
 
             if rejected_reason:
@@ -2700,6 +2844,7 @@ class StrategyAgent:
         if today_str == self._today_date:
             return
         self._today_date = today_str
+        self.reset_daily_health()
         self._reentry_used_today = False
         self._last_sl_exit_time = None
         self._trades_today_count = 0
@@ -2782,16 +2927,44 @@ class StrategyAgent:
             for r in winning
             if str(r.get("name", "") or "").strip()
         ]
+        # Resolve structure bias
+        structure_bias = ""
+        if hasattr(setup, "context") and isinstance(setup.context, dict):
+            structure_bias = (
+                setup.context.get("market_structure", {}).get("structure_state", {}).get("bias")
+                or setup.context.get("structure_bias")
+                or setup.context.get("market_structure", {}).get("bias")
+                or ""
+            )
+        if not structure_bias and hasattr(setup, "structure_bias"):
+            structure_bias = getattr(setup, "structure_bias", "")
+        if not structure_bias:
+            reg_name = str(getattr(regime, "value", regime) or "").upper()
+            dir_str = str(getattr(direction, "value", direction) or "").upper()
+            if "TREND" in reg_name:
+                structure_bias = "BULLISH" if "CALL" in dir_str or "BUY" in dir_str else "BEARISH"
+            elif "RANGE" in reg_name:
+                structure_bias = "RANGING"
+            else:
+                structure_bias = "BULLISH" if "CALL" in dir_str or "BUY" in dir_str else "BEARISH"
+
+        conf_num = float(confidence or 0.0)
+        votes_num = int(votes or 0)
+        est_rank = round(conf_num * 0.60 + min(1.0, votes_num / 6.0) * 0.40, 2)
+
         payload = {
-            "symbol": "NIFTY",
+            "symbol": str(getattr(self, "_active_symbol", None) or os.getenv("INSTRUMENT", "SILVERM")).upper(),
             "direction": getattr(direction, "value", direction),
             "confidence": round(float(confidence or 0.0), 4),
+            "ml_confidence": round(float(confidence or 0.0), 4),
+            "ml_rank_score": est_rank,
             "votes": int(votes or 0),
             "strategies_fired": strategies_fired,
             "nifty_ltp": round(float(ltp or 0.0), 2),
             "nifty_price": round(float(ltp or 0.0), 2),
             "timestamp": current_ts.isoformat(),
             "regime": getattr(regime, "value", regime),
+            "structure_bias": structure_bias,
             "rejection_reason": rejection_reason,
             "runner_rejection_reason": rejection_reason,
             "lifecycle_status": "REJECTED",
@@ -2802,6 +2975,7 @@ class StrategyAgent:
                 **{str(r.get("name", "") or ""): r.get("meta", {}) for r in winning if str(r.get("name", "") or "")},
                 "_context": {
                     "setup": setup.to_dict() if hasattr(setup, "to_dict") else {},
+                    "structure_bias": structure_bias,
                     "runner_gate_reject": True,
                     "weighted_score": round(float(weighted_score or 0.0), 4),
                 },
@@ -3375,8 +3549,8 @@ class StrategyAgent:
             str(setup_type or "").lower() in {"breakout", "vote_aligned", "trend_pullback"}
             and (indep_cat_count >= 4 or setup_strength >= 0.75 or confidence >= 0.90)
         )
-        # Climax/Exhaustion protection: Do not exempt EXHAUSTION_RISK if low category breadth
-        if "EXHAUSTION_RISK" in rejection_reasons and indep_cat_count < 3:
+        # Climax/Exhaustion protection: Do not exempt EXHAUSTION_RISK if low category breadth unless setup strength/confidence is high
+        if "EXHAUSTION_RISK" in rejection_reasons and indep_cat_count < 3 and setup_strength < 0.80 and confidence < 0.90:
             is_exempt = False
 
         # Determine strongest rejection conditions
@@ -4282,7 +4456,7 @@ class StrategyAgent:
     ) -> str:
         regime = msg.payload.get("regime", Regime.TRENDING.value)
         regime_details = msg.payload.get("regime_details", {}) or {}
-        instrument = os.getenv("INSTRUMENT", "SILVERMIC")
+        instrument = os.getenv("INSTRUMENT", "SILVERM")
 
         atr = float((df["high"] - df["low"]).tail(RUNNER_EXPECTED_MOVE_ATR_PERIOD).mean()) if len(df) else 0.0
         orb_range = (

@@ -1,11 +1,8 @@
 """
-scripts/train_ml.py — SignalForge ML training entrypoint
-=========================================================
+scripts/train_ml.py — MCXForge ML training entrypoint
+=====================================================
 Single entrypoint for the shared ML pipeline:
-    journal -> ml.features.extract() -> ml.model.SignalForgeEnsemble
-
-This script intentionally delegates all training logic to ml/training/trainer.py
-so live inference and offline training stay aligned.
+    journal -> ml.features.extract() -> ml.model.CommodityMLEnsemble
 """
 
 import argparse
@@ -127,7 +124,7 @@ def _promote_candidate(candidate_path: Path, production_path: Path) -> Path | No
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train SignalForge ML models")
+    parser = argparse.ArgumentParser(description="Train MCXForge ML models")
     parser.add_argument(
         "--min-trades",
         type=int,
@@ -220,7 +217,7 @@ def main() -> None:
 
     print()
     print("━" * 60)
-    print("  SignalForge ML Training")
+    print("  MCXForge ML Training")
     print("━" * 60)
     print(f"  Data timeframe:  {BACKTEST_TIMEFRAME}")
     print(f"  Model timeframe: {LIVE_TIMEFRAME}")

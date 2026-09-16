@@ -162,8 +162,9 @@ class OptionsFlowDetector:
             days = (3 - d.weekday()) % 7 or 7
             expiry_date = d + timedelta(days=days)
 
-        atm  = int(round(spot / NIFTY_STRIKE_STEP) * NIFTY_STRIKE_STEP)
-        step = NIFTY_STRIKE_STEP
+        sym = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+        step = 500 if "SILVER" in sym else (100 if "GOLD" in sym else 50)
+        atm  = int(round(spot / step) * step)
 
         call_flow = 0.0
         put_flow  = 0.0
@@ -172,8 +173,8 @@ class OptionsFlowDetector:
         for i in range(-STRIKES_TO_TRACK, STRIKES_TO_TRACK + 1):
             k = atm + i * step
             try:
-                ce_sym = build_option_symbol("NIFTY", expiry_date, k, "CE")
-                pe_sym = build_option_symbol("NIFTY", expiry_date, k, "PE")
+                ce_sym = build_option_symbol(sym, expiry_date, k, "CE")
+                pe_sym = build_option_symbol(sym, expiry_date, k, "PE")
                 ce_ltp = broker.get_option_ltp(ce_sym)
                 pe_ltp = broker.get_option_ltp(pe_sym)
             except Exception:

@@ -11,17 +11,23 @@ Fix log:
 
 import numpy as np
 import pandas as pd
-import joblib
 import warnings
-warnings.filterwarnings("ignore", message=".*XGBoost, please export the model.*")
+warnings.filterwarnings("ignore", message=r"(?s).*If you are loading a serialized model.*")
+warnings.filterwarnings("ignore", message=r"(?s).*Trying to unpickle estimator.*")
+warnings.filterwarnings("ignore", message=r".*sklearn.utils.parallel.delayed.*")
+warnings.filterwarnings("ignore", message=r".*XGBoost, please export the model.*")
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+except ImportError:
+    pass
+
+import joblib
 from pathlib import Path
 from datetime import datetime
 from loguru import logger
 from dataclasses import dataclass, field
 from typing import Union
-
-# Suppress the joblib/scikit-learn parallel delayed UserWarning emitted by LightGBM/XGBoost
-warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*")
 
 
 @dataclass
@@ -404,7 +410,16 @@ class SignalForgeEnsemble:
         if not path.exists():
             return False
         try:
-            data              = joblib.load(path)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=r"(?s).*If you are loading a serialized model.*")
+                warnings.filterwarnings("ignore", message=r"(?s).*Trying to unpickle estimator.*")
+                try:
+                    from sklearn.exceptions import InconsistentVersionWarning
+                    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+                except ImportError:
+                    pass
+                warnings.filterwarnings("ignore", category=UserWarning)
+                data              = joblib.load(path)
             self.models       = data.get("models", {})
             self.feature_cols = data.get("feature_cols", [])
             self.meta         = data.get("meta", ModelMeta())

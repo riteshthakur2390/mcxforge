@@ -23,12 +23,20 @@ try:
     warnings.filterwarnings("ignore", category=urllib3.exceptions.NotOpenSSLWarning)
 except Exception:
     pass
+warnings.filterwarnings("ignore", message=r"(?s).*If you are loading a serialized model.*")
+warnings.filterwarnings("ignore", message=r"(?s).*Trying to unpickle estimator.*")
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+except ImportError:
+    pass
 
 import sys
 import os
 import json
 from pathlib import Path
-from datetime import datetime, time
+import time as time_mod
+from datetime import datetime, time as dt_time
 import numpy as np
 import pandas as pd
 from dataclasses import asdict
@@ -43,7 +51,7 @@ from core.strategies.ensemble import (
     count_independent_categories,
     CommodityEnsembleEngine,
     MCXSession,
-    SILVERMIC_CONFIG,
+    SILVERM_CONFIG,
     EnsembleRunResult,
     EnsembleTradeRecord,
 )
@@ -59,18 +67,19 @@ IST = pytz.timezone("Asia/Kolkata")
 def run_commodity_backtest(
     days: int = 30,
     run_all: bool = False,
+    symbol: str = "SILVERM",
     start_date: str | None = None,
     end_date: str | None = None,
     timeframe: str = "5m",
     data_file: str | None = None,
     output_dir_str: str | None = None,
     capital: float = 200_000.0,
-    max_cap_pct: float = 15.0,
+    max_cap_pct: float = float(os.getenv("MAX_CAP_PCT", "20.0")),
     quality_mode: bool = True,
     min_votes: int = 5,
     min_categories: int = 2,
     session_filter: str = "EVENING",
-    min_ml_conf: float | None = 0.28,
+    min_ml_conf: float | None = float(os.getenv("MIN_ML_CONF", "0.32")),
     send_telegram: bool = False,
     send_telegram_trades: bool = False,
 ):
@@ -82,16 +91,61 @@ def run_commodity_backtest(
         output_dir = Path(f"analysis/backtest_{days}d")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Load Data based on timeframe / explicit path / days
+    sym_clean = (symbol or "SILVERM").upper().strip()
+    interval_code = "1d" if "d" in timeframe.lower() else "5m"
+
+    # 1. Load Data based on timeframe / explicit path / symbol
     if data_file:
         csv_path = Path(data_file)
-    elif "d" in timeframe.lower():
-        csv_path = Path("data/historical/SILVERMIC_dhan_1d.csv")
     else:
-        csv_path = Path("data/historical/SILVERMIC_dhan_5m.csv")
+        candidates = [
+            Path(f"data/historical/{sym_clean}_dhan_{interval_code}.csv"),
+            Path(f"data/historical/{sym_clean}_upstox_{interval_code}.csv"),
+            Path(f"data/historical/{sym_clean}_{interval_code}.csv"),
+        ]
+        if sym_clean in ("SILVERM", "SILVERMIC"):
+            candidates.extend([
+                Path(f"data/historical/SILVERMIC_dhan_{interval_code}.csv"),
+                Path(f"data/historical/SILVERMIC_{interval_code}.csv"),
+                Path(f"data/historical/SILVERM_dhan_{interval_code}.csv"),
+            ])
+        csv_path = None
+        for c in candidates:
+            if c.exists():
+                csv_path = c
+                break
+        if csv_path is None:
+            csv_path = candidates[0]
+
+    # Auto-refresh check: only allowed outside active live market hours to protect broker rate limits
+    now_ist = datetime.now(IST)
+    is_live_market = (now_ist.weekday() < 5 and dt_time(9, 0) <= now_ist.time() <= dt_time(23, 30))
+
+    if not data_file and csv_path.exists() and not is_live_market:
+        try:
+            today_d = now_ist.date()
+            yesterday_d = today_d - pd.Timedelta(days=1)
+            while yesterday_d.weekday() >= 5: # skip weekends
+                yesterday_d -= pd.Timedelta(days=1)
+            
+            tail_df = pd.read_csv(csv_path).tail(1)
+            ts_c = [c for c in tail_df.columns if "time" in c.lower() or "date" in c.lower()][0]
+            last_recorded_date = pd.to_datetime(tail_df[ts_c].iloc[0], format="mixed", utc=True).tz_convert("Asia/Kolkata").date()
+            if last_recorded_date < yesterday_d:
+                logger.info(f"Local CSV for {sym_clean} ends at {last_recorded_date}. Refreshing from broker up to {yesterday_d}...")
+                from scripts.sync_commodity_historical_data import sync_all_commodities_historical
+                sync_all_commodities_historical(symbols=[sym_clean], allow_market_hours=False)
+        except Exception as e:
+            logger.warning(f"Could not auto-refresh local historical candles: {e}")
 
     loader = HistoricalDataLoader()
-    df_raw = loader.load(str(csv_path))
+    df_raw = loader.load(str(csv_path), auto_repair=True)
+
+    # If market is currently open today, exclude today's incomplete session so backtest covers completed sessions up to yesterday
+    now_ist = datetime.now(IST)
+    if end_date is None and not run_all and df_raw.index.max().date() == now_ist.date() and now_ist.time() < dt_time(23, 30):
+        logger.info(f"Excluding partial intraday session for today ({now_ist.date()}); evaluating completed sessions up to yesterday.")
+        df_raw = df_raw[df_raw.index.date < now_ist.date()]
 
     warmup_bars = 100
     filter_start_dt = None
@@ -127,7 +181,7 @@ def run_commodity_backtest(
     logger.info(f"Loaded {label} from {csv_path}: {total_bars} bars over {trading_days} sessions ({df_eval.index.min()} to {df_eval.index.max()})")
 
     # 2. Load Agent 3 Trained Commodity ML Ensemble
-    ml_path = Path("ml/saved_models/silvermic_5minute.pkl") if "d" not in timeframe else Path("ml/saved_models/silvermic_1h.pkl")
+    ml_path = Path("ml/saved_models/silverm_5minute.pkl") if "d" not in timeframe else Path("ml/saved_models/silverm_1h.pkl")
     if not ml_path.exists():
         ml_path = Path("ml/saved_models/silvermic_5minute.pkl")
     ml_ensemble = SignalForgeEnsemble()
@@ -135,11 +189,11 @@ def run_commodity_backtest(
     logger.info(f"Loaded ML model: {ml_path} (loaded={ml_loaded}, models={list(ml_ensemble.models.keys()) if ml_loaded else []})")
 
     # 2b. Resolve Target Instrument Configuration (Default: SILVERM)
-    active_comm = os.getenv("COMMODITY_SYMBOL", "SILVERM")
+    active_comm = symbol or os.getenv("COMMODITY_SYMBOL", "SILVERM")
     inst_cfg = get_instrument_config(active_comm)
 
-    # 3. Initialize Capital & Risk Parameters (Max Capital per Trade = 15% of Capital = ₹30,000 max)
-    max_capital_per_trade = capital * (max_cap_pct / 100.0)  # ₹30,000 max (15% of ₹200,000 capital)
+    # 3. Initialize Capital & Risk Parameters (Max Capital per Trade = 20% of Capital = ₹40,000 max)
+    max_capital_per_trade = capital * (max_cap_pct / 100.0)  # ₹40,000 max (20% of ₹200,000 capital)
     max_premium_per_trade = max_capital_per_trade
     max_margin_per_trade = max_capital_per_trade
     lot_size = inst_cfg.lot_size            # 5 kg for SILVERM
@@ -195,6 +249,7 @@ def run_commodity_backtest(
     except Exception:
         _dhan_broker = None
     
+    _dhan_contract_cache: dict[tuple, tuple[str, str]] = {}
     for t in raw_trades:
         # Find candle slice at entry time to extract features
         entry_ts = pd.to_datetime(t.entry_time)
@@ -225,29 +280,65 @@ def run_commodity_backtest(
             except Exception:
                 pass
 
-        # Option Premium Invested for 1 lot (Capped strictly at 15% of capital = Rs. 30,000 max per trade)
-        # Option Premium & Position Sizing (Capped strictly at 15% of capital = Rs. 30,000 max per trade)
-        est_option_premium = max(100.0, round(t.entry_price * 0.025, 1))
-        option_delta = 0.50
-        est_exit_premium = max(10.0, round(est_option_premium + (t.pnl_points * option_delta), 1))
-        contract_points = round(est_exit_premium - est_option_premium, 1)
-
-        single_lot_margin = est_option_premium * lot_size
-        max_affordable_lots = max(1, int(max_capital_per_trade // max(single_lot_margin, 1.0)))
-
-        # Late entry metric: Entry efficiency = MFE / (MFE + MAE)
-        total_excursion = t.mfe_pts + t.mae_pts
-        entry_efficiency = (t.mfe_pts / total_excursion) if total_excursion > 0 else 0.5
-        is_late_entry = t.mae_pts > (1.5 * max(t.mfe_pts, 5.0)) and t.net_pnl_inr < 0
-
-        # Session classification
+        # 1. Resolve Instrument & Option Spec
+        inst_symbol = t.symbol or active_comm
+        inst_cfg = get_instrument_config(inst_symbol)
+        strike_step = getattr(inst_cfg, "strike_step", 1000) or 1000
+        atm_strike = int(round(t.entry_price / strike_step) * strike_step)
+        
+        is_call = t.direction in ("BUY", "BUY_CALL", "LONG")
+        opt_type = "CE" if is_call else "PE"
+        
         entry_dt = entry_ts.to_pydatetime()
         session_enum = MCXSession.from_time(entry_dt.time())
 
+        # 2. Resolve Active Monthly Option Contract (Trade same month, roll to next month only if DTE <= 5 days)
+        from instruments.registry import resolve_active_option_contract
+        contract_symbol, active_expiry, dte = resolve_active_option_contract(
+            symbol=inst_symbol,
+            as_of=entry_dt.date(),
+            strike=atm_strike,
+            option_type=opt_type,
+            rollover_days=5,
+        )
+        expiry_display = active_expiry.strftime("%d %b %Y")
+
+        # Check Dhan scrip master if available for verified broker trading symbol
+        cache_key = (inst_symbol, entry_dt.date(), opt_type, atm_strike)
+        if cache_key in _dhan_contract_cache:
+            contract_symbol, expiry_display = _dhan_contract_cache[cache_key]
+        elif _dhan_broker is not None:
+            try:
+                dhan_contracts = _dhan_broker.get_mcx_option_contracts(
+                    symbol=inst_symbol,
+                    expiry=active_expiry,
+                    option_type=opt_type,
+                    strikes=[atm_strike],
+                    fetch_live_quotes=False,
+                )
+                if dhan_contracts:
+                    contract_symbol = dhan_contracts[0].symbol
+                    expiry_display = str(dhan_contracts[0].expiry_date)[:10]
+                _dhan_contract_cache[cache_key] = (contract_symbol, expiry_display)
+            except Exception:
+                _dhan_contract_cache[cache_key] = (contract_symbol, expiry_display)
+
+        # 3. Real Black-Scholes Option Premium at Entry based on DTE, Spot & Commodity IV
+        from utils.option_utils import estimate_atm_premium
+        est_option_premium = estimate_atm_premium(
+            underlying=t.entry_price,
+            days_to_expiry=dte,
+            symbol=inst_symbol,
+        )
+        single_lot_margin = round(est_option_premium * lot_size, 2)
+
+        # 4. Late entry metric: Entry efficiency = MFE / (MFE + MAE)
+        total_excursion = t.mfe_pts + t.mae_pts
+        entry_efficiency = (t.mfe_pts / total_excursion) if total_excursion > 0 else 0.5
+        is_late_entry = t.mae_pts > (1.5 * max(t.mfe_pts, 5.0)) and t.net_pnl_inr < 0
         peak_pnl_pct = (t.mfe_pts / t.entry_price * 100.0) if t.entry_price > 0 else 0.0
 
-        # SignalForge Composite ML Rank Score
-        # ML_RANK_MODEL_WEIGHT = 0.60, STRATEGY = 0.22, VOTE = 0.10, REGIME = 0.08
+        # 5. SignalForge Composite ML Rank Score
         cat_count = getattr(t, "categories", 1) or count_independent_categories(t.strategies_fired)
         vote_strength = min(1.0, t.votes / 6.0)
         cat_strength = min(1.0, cat_count / 3.0)
@@ -263,54 +354,31 @@ def run_commodity_backtest(
         )
         ml_rank_tier = "HIGH" if ml_rank_score >= 0.70 else ("MEDIUM" if ml_rank_score >= 0.45 else "LOW")
 
-        # Dynamic Lot Sizing within max_capital_per_trade (15% = ₹30,000 budget):
-        # High Conviction allocates full affordable budget; Medium/Low allocate conservative size.
-        if ml_rank_tier == "HIGH":
-            num_lots = max_affordable_lots
-        elif ml_rank_tier == "MEDIUM":
-            num_lots = max(1, min(max_affordable_lots, 3))
+        # 6. Conviction-Based Dynamic Lot Sizing (Strictly bounded by Capital Budget)
+        max_position_budget = capital * (max_cap_pct / 100.0)
+        affordable_lots = int(max_position_budget // max(single_lot_margin, 1.0))
+
+        # Hard Capital Budget Enforcement:
+        # If even 1 single lot exceeds the per-trade budget, the trade CANNOT be afforded and is rejected.
+        if affordable_lots < 1 or single_lot_margin > max_position_budget:
+            continue
+
+        if affordable_lots >= 3 and (ml_rank_tier == "HIGH" or t.votes >= 8):
+            num_lots = min(3, affordable_lots)
+        elif affordable_lots >= 2 and (ml_rank_tier in ("HIGH", "MEDIUM") or t.votes >= 6):
+            num_lots = min(2, affordable_lots)
         else:
-            num_lots = max(1, min(max_affordable_lots, 2))
+            num_lots = 1
+
 
         trade_quantity = num_lots * lot_size
-        margin_used = single_lot_margin * num_lots
+        margin_used = round(single_lot_margin * num_lots, 2)
         margin_util_pct = (margin_used / capital) * 100.0
 
-        # Resolve active contract / options details from Dhan
-        inst_symbol = t.symbol or active_comm
-        inst_cfg = get_instrument_config(inst_symbol)
-        strike_step = getattr(inst_cfg, "strike_step", 500) or 500
-        atm_strike = int(round(t.entry_price / strike_step) * strike_step)
-        
-        is_call = t.direction in ("BUY", "BUY_CALL", "LONG")
-        opt_type = "CE" if is_call else "PE"
-        
-        contract_symbol = ""
-        expiry_display = ""
-        if _dhan_broker is not None:
-            try:
-                dhan_contracts = _dhan_broker.get_mcx_option_contracts(
-                    symbol=inst_symbol,
-                    expiry=entry_dt.date(),
-                    option_type=opt_type,
-                    strikes=[atm_strike],
-                    fetch_live_quotes=False,
-                )
-                if dhan_contracts:
-                    contract_symbol = dhan_contracts[0].symbol
-                    expiry_display = str(dhan_contracts[0].expiry_date)[:10]
-            except Exception:
-                pass
-
-        if not contract_symbol:
-            try:
-                active_contract = resolve_active_contract(inst_symbol, as_of=entry_dt.date())
-                expiry_display = active_contract.expiry_date.strftime("%d %b %Y") if active_contract and hasattr(active_contract, "expiry_date") else ""
-                exp_code = active_contract.expiry_date.strftime("%d%b%y").upper() if active_contract and hasattr(active_contract, "expiry_date") else ""
-                contract_symbol = f"{inst_symbol} {exp_code} {atm_strike} {opt_type}".strip()
-            except Exception:
-                expiry_display = ""
-                contract_symbol = f"{inst_symbol} {atm_strike} {opt_type}"
+        # 7. Real Option Exit Premium & Charges
+        option_delta = 0.50
+        est_exit_premium = max(5.0, round(est_option_premium + (t.pnl_points * option_delta), 1))
+        contract_points = round(est_exit_premium - est_option_premium, 1)
 
         from utils.brokerage_calculator import calculate_option_trade_charges
         opt_charges = calculate_option_trade_charges(
@@ -338,11 +406,13 @@ def run_commodity_backtest(
             "actual_premium": est_option_premium,
             "entry_premium": est_option_premium,
             "exit_premium": est_exit_premium,
-            "contract_points": contract_points,
-            "gross_pnl_inr": t.gross_pnl_inr,
-            "fees_inr": t.fees_inr,
-            "net_pnl_inr": t.net_pnl_inr,
-            "realized_pnl": t.net_pnl_inr,
+            "gross_pnl_inr": opt_gross_pnl,
+            "fees_inr": opt_fees,
+            "net_pnl_inr": opt_net_pnl,
+            "realized_pnl": opt_net_pnl,
+            "underlying_gross_pnl_inr": t.gross_pnl_inr,
+            "underlying_fees_inr": t.fees_inr,
+            "underlying_net_pnl_inr": t.net_pnl_inr,
             "total_invested": round(margin_used, 2),
             "margin_used_inr": round(margin_used, 2),
             "margin_util_pct": round(margin_util_pct, 2),
@@ -819,8 +889,7 @@ def run_commodity_backtest(
                         "target": target_mode,
                     }
                     notifier.send_trade_closed_sync(close_p, target=target_mode)
-                    import time
-                    time.sleep(0.35)
+                    time_mod.sleep(0.35)
 
             # Send overall performance summary card
             if send_telegram:
@@ -864,13 +933,14 @@ if __name__ == "__main__":
     parser.add_argument("--timeframe", type=str, default="5m", choices=["5m", "15m", "1h", "1d"], help="Bar timeframe (5m or 1d for 5-year daily)")
     parser.add_argument("--data-file", type=str, default=None, help="Explicit path to historical CSV")
     parser.add_argument("--capital", type=float, default=200_000.0, help="Starting capital (default: 200,000)")
-    parser.add_argument("--max-cap-pct", type=float, default=15.0, help="Max capital percentage usable per trade (default: 15.0%)")
+    parser.add_argument("--max-cap-pct", type=float, default=20.0, help="Max capital percentage usable per trade (default: 20.0%% -> ₹40,000 on ₹200k)")
     parser.add_argument("--output-dir", type=str, default=None, help="Output directory")
     parser.add_argument("--raw", action="store_true", help="Run raw unfiltered baseline (all 43 strategies, all sessions, min votes 2)")
     parser.add_argument("--min-votes", type=int, default=5, help="Minimum vote consensus threshold (default: 5)")
     parser.add_argument("--min-cats", "--min-categories", type=int, default=2, help="Minimum independent strategy categories (default: 2)")
-    parser.add_argument("--session", type=str, default="EVENING", choices=["EVENING", "ALL", "MORNING", "SKIP_AFTERNOON"], help="Session filter (EVENING for US COMEX, ALL for full day, SKIP_AFTERNOON)")
-    parser.add_argument("--min-ml-conf", type=float, default=0.28, help="Filter out trades below ML confidence threshold (default: 0.28)")
+    parser.add_argument("--session", type=str, default="EVENING", choices=["ALL", "EVENING", "MORNING", "SKIP_AFTERNOON"], help="Session filter (EVENING for US COMEX institutional liquidity, ALL for full day, MORNING, SKIP_AFTERNOON)")
+    parser.add_argument("--min-ml-conf", type=float, default=float(os.getenv("MIN_ML_CONF", "0.32")), help="Filter out trades below ML confidence threshold (default: 0.32)")
+    parser.add_argument("--symbol", type=str, default="SILVERM", help="Commodity symbol to backtest (SILVERM, GOLDM, CRUDEOIL, NATGAS)")
     parser.add_argument("--telegram", action="store_true", help="Send comprehensive backtest summary report to Telegram")
     parser.add_argument("--telegram-trades", action="store_true", help="Send individual trade opened/closed alerts to Telegram")
     args = parser.parse_args()
@@ -881,6 +951,7 @@ if __name__ == "__main__":
     run_commodity_backtest(
         days=effective_days,
         run_all=args.all,
+        symbol=args.symbol,
         start_date=args.start_date,
         end_date=args.end_date,
         timeframe=args.timeframe,
@@ -893,6 +964,6 @@ if __name__ == "__main__":
         min_categories=args.min_cats,
         session_filter=args.session,
         min_ml_conf=args.min_ml_conf,
-        send_telegram=args.telegram,
-        send_telegram_trades=args.telegram_trades,
+        send_telegram=args.telegram or (os.getenv("BACKTEST_TELEGRAM_ENABLED", "").strip().lower() in ("1", "true", "yes")),
+        send_telegram_trades=args.telegram_trades or (os.getenv("BACKTEST_TELEGRAM_TRADES", "").strip().lower() in ("1", "true", "yes")),
     )

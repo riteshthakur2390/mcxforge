@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Summarize live SignalForge health from today's logs.
+Summarize live MCXForge health from today's logs.
 
-Run this after the market has been open for 1-2 hours to verify that live data,
-option volume, strategy voting, ML filtering, and trade planning are flowing.
+Run this after the market has been open for 1-2 hours to verify that live commodity data,
+strategy voting, ML filtering, and trade planning are flowing.
 """
 
 from __future__ import annotations
@@ -88,14 +88,21 @@ class ProbeResult:
 
 def _today_log() -> Path:
     today = datetime.now().strftime("%Y-%m-%d")
-    return Path("logs") / f"signalforge_{today}.log"
+    mcx_log = Path("logs") / f"mcxforge_{today}.log"
+    if mcx_log.exists():
+        return mcx_log
+    date_compact = today.replace("-", "")
+    mcx_compact = Path("logs") / f"mcxforge_{date_compact}.log"
+    if mcx_compact.exists():
+        return mcx_compact
+    return mcx_log
 
 
 def _last_session(lines: list[str]) -> tuple[int, list[str]]:
     markers = [
         idx
         for idx, line in enumerate(lines)
-        if "SignalForge v1.0.0" in line or "SignalForge running." in line
+        if "MCXForge" in line or "MCXFORGE" in line or "SignalForge v1.0.0" in line or "SignalForge running." in line
     ]
     start = markers[-1] if markers else 0
     return start, lines[start:]
@@ -233,12 +240,13 @@ def _active_live_data_probes(timeout_seconds: float) -> list[ProbeResult]:
     except Exception as exc:
         return [ProbeResult("broker factory", False, f"{type(exc).__name__}: {exc}")]
 
+    check_sym = os.getenv("INSTRUMENT", "SILVERM")
     nifty_ltp = 0.0
     try:
-        nifty_ltp = float(_call_with_timeout(broker.get_ltp, "NIFTY", timeout_seconds=timeout_seconds) or 0.0)
-        results.append(ProbeResult("NIFTY live LTP", nifty_ltp > 0, f"ltp={nifty_ltp:.2f}"))
+        nifty_ltp = float(_call_with_timeout(broker.get_ltp, check_sym, timeout_seconds=timeout_seconds) or 0.0)
+        results.append(ProbeResult(f"{check_sym} live LTP", nifty_ltp > 0, f"ltp={nifty_ltp:.2f}"))
     except Exception as exc:
-        results.append(ProbeResult("NIFTY live LTP", False, f"{type(exc).__name__}: {exc}"))
+        results.append(ProbeResult(f"{check_sym} live LTP", False, f"{type(exc).__name__}: {exc}"))
 
     token_invalid = bool(getattr(broker, "_token_invalid", False))
     if token_invalid:
@@ -258,7 +266,7 @@ def _active_live_data_probes(timeout_seconds: float) -> list[ProbeResult]:
         end = now.strftime("%Y-%m-%d")
         df = _call_with_timeout(
             broker.get_historical_data,
-            "NIFTY",
+            check_sym,
             LIVE_TIMEFRAME,
             start,
             end,
@@ -272,29 +280,31 @@ def _active_live_data_probes(timeout_seconds: float) -> list[ProbeResult]:
         )
         results.append(
             ProbeResult(
-                f"NIFTY {LIVE_TIMEFRAME} candles",
+                f"{check_sym} {LIVE_TIMEFRAME} candles",
                 has_ohlcv,
                 f"rows={0 if df is None else len(df)} latest={latest}",
             )
         )
     except Exception as exc:
-        results.append(ProbeResult(f"NIFTY {LIVE_TIMEFRAME} candles", False, f"{type(exc).__name__}: {exc}"))
+        results.append(ProbeResult(f"{check_sym} {LIVE_TIMEFRAME} candles", False, f"{type(exc).__name__}: {exc}"))
 
     if nifty_ltp <= 0:
-        results.append(ProbeResult("option chain OI/IV", False, "skipped because NIFTY LTP unavailable"))
-        results.append(ProbeResult("OIRecorder live snapshot", False, "skipped because NIFTY LTP unavailable"))
+        results.append(ProbeResult("option chain OI/IV", False, f"skipped because {check_sym} LTP unavailable"))
+        results.append(ProbeResult("OIRecorder live snapshot", False, f"skipped because {check_sym} LTP unavailable"))
         return results
 
     try:
-        atm = get_atm_strike(nifty_ltp)
-        expiry, _ = get_nearest_expiry(0, datetime.now())
-        strikes = [atm - 50, atm, atm + 50]
+        from utils.option_utils import get_index_strike_step
+        step = get_index_strike_step(check_sym)
+        atm = get_atm_strike(nifty_ltp, symbol=check_sym)
+        expiry, _ = get_nearest_expiry(0, datetime.now(), symbol=check_sym)
+        strikes = [atm - step, atm, atm + step]
         contracts = []
         for option_type in ("CE", "PE"):
             contracts.extend(
                 _call_with_timeout(
                     broker.get_option_contracts,
-                    "NIFTY",
+                    check_sym,
                     expiry,
                     option_type,
                     strikes,
@@ -411,11 +421,11 @@ def _health_alert_message(
     orders: int,
 ) -> tuple[bool, str]:
     issues: list[str] = []
+    active_sym = os.getenv("INSTRUMENT", "SILVERM")
     critical_names = {
-        "NIFTY live LTP",
-        "option chain OI/IV",
-        "OIRecorder live snapshot",
-        "OptionVolumeRecorder live features",
+        f"{active_sym} live LTP",
+        "broker option/OI auth",
+        f"{active_sym} 5m candles",
     }
     for result in active_failures:
         if result.name in critical_names or "broker" in result.name.lower():
@@ -425,16 +435,17 @@ def _health_alert_message(
             issues.append(f"{result.name}: {result.detail}")
     if broker_auth_failures:
         issues.append(f"log auth failures={broker_auth_failures}")
-    if not nonzero_snapshots and not nonzero_opt_vol:
-        issues.append("live log has zero option-volume snapshots / opt_vol")
+    if os.getenv("TRADE_OPTIONS", "false").lower() == "true":
+        if not nonzero_snapshots and not nonzero_opt_vol:
+            issues.append("live log has zero option-volume snapshots / opt_vol")
     if yfinance_fallbacks:
         issues.append(f"yfinance fallback used={yfinance_fallbacks}")
 
     should_alert = bool(issues)
     status = "ALERT" if should_alert else "OK"
-    issue_text = "\n".join(f"- {item}" for item in issues[:8]) if issues else "- live broker/OI/IV/volume probes OK"
+    issue_text = "\n".join(f"- {item}" for item in issues[:8]) if issues else "- live broker/data probes OK"
     message = (
-        f"SignalForge Health {status}\n"
+        f"MCXForge Health {status}\n"
         f"Market TS: {latest_market_ts or 'unknown'}\n"
         f"Flow: raw={raw_count}, ML approved={ml_approved}, planner={planner_passed}, orders={orders}\n"
         f"{issue_text}"
@@ -444,8 +455,8 @@ def _health_alert_message(
 
 def main() -> int:
     os.environ.setdefault("TELEGRAM_TARGET", "LIVE")
-    parser = argparse.ArgumentParser(description="Check live SignalForge health from logs.")
-    parser.add_argument("--log", default=str(_today_log()), help="SignalForge log path")
+    parser = argparse.ArgumentParser(description="Check live MCXForge health from logs.")
+    parser.add_argument("--log", default=str(_today_log()), help="MCXForge log path")
     parser.add_argument(
         "--full-day",
         action="store_true",
@@ -454,12 +465,12 @@ def main() -> int:
     parser.add_argument(
         "--no-active-probes",
         action="store_true",
-        help="Only analyze logs; skip strategy, utility, broker, and OI/IV active probes",
+        help="Only analyze logs; skip strategy, utility, broker, and active probes",
     )
     parser.add_argument(
         "--no-live-probes",
         action="store_true",
-        help="Run strategy/utility active probes but skip live broker and OI/IV calls",
+        help="Run strategy/utility active probes but skip live broker calls",
     )
     parser.add_argument(
         "--probe-timeout",
@@ -470,7 +481,7 @@ def main() -> int:
     parser.add_argument(
         "--telegram",
         action="store_true",
-        help="Send Telegram alert when live data/OI/IV/volume health is degraded",
+        help="Send Telegram alert when live data/broker health is degraded",
     )
     parser.add_argument(
         "--telegram-always",
@@ -484,7 +495,7 @@ def main() -> int:
         print(f"FAIL   log not found: {log_path}")
         if args.telegram:
             _send_telegram_alert(
-                f"*SignalForge Health ALERT*\n"
+                f"*MCXForge Health ALERT*\n"
                 f"Log not found: `{log_path}`\n"
                 "Live process may not be running after market open."
             )
@@ -644,7 +655,7 @@ def main() -> int:
     active_failures = [result for result in active_probe_results if not result.ok and not result.warn]
     active_warnings = [result for result in active_probe_results if not result.ok and result.warn]
 
-    print("SignalForge Live Health")
+    print("MCXForge Live Health")
     print(f"log: {log_path}")
     print(f"scope: {'full day' if args.full_day else f'latest session from line {start_line + 1}'}")
     print(f"latest_market_ts: {latest_market_ts or 'unknown'}")

@@ -15,6 +15,7 @@ Key differences from Kite:
 """
 
 import os
+import re
 from typing import Any, Optional, Union
 import pandas as pd
 from datetime import datetime, date, timedelta
@@ -28,6 +29,7 @@ from broker.base_broker import BaseBroker, OptionContract, OrderResult, Position
 from broker.yfinance_broker import YFinanceBroker
 from config.settings import DATA_CACHE_DIR
 from data.historical_store import HistoricalCandleStore
+from utils.option_utils import build_option_symbol
 
 def _build_option_symbol_compat(symbol: str, expiry_date: date, strike: int, option_type: str) -> str:
     try:
@@ -44,19 +46,19 @@ IST = pytz.timezone("Asia/Kolkata")
 # Full list: https://assets.upstox.com/market-quote/instruments/exchange/{NSE,BSE,MCX}.json.gz
 UPSTOX_SYMBOL_MAP = {
     # MCX Commodities
-    "SILVERMIC":   "MCX_FO|SILVERMIC",
-    "SILVER":      "MCX_FO|SILVER",
-    "GOLD":        "MCX_FO|GOLD",
-    "GOLDM":       "MCX_FO|GOLDM",
-    "CRUDEOIL":    "MCX_FO|CRUDEOIL",
-    "CRUDEOILM":   "MCX_FO|CRUDEOILM",
-    "NATURALGAS":  "MCX_FO|NATURALGAS",
-    "NATGASMINI":  "MCX_FO|NATGASMINI",
-    # Legacy indices
-    "NIFTY 50":    "NSE_INDEX|Nifty 50",
-    "NIFTY":       "NSE_INDEX|Nifty 50",
+    "SILVERM":     "MCX_FO|483080",
+    "SILVERMIC":   "MCX_FO|562058",
+    "SILVER":      "MCX_FO|495214",
+    "GOLD":        "MCX_FO|483079",
+    "GOLDM":       "MCX_FO|569003",
+    "CRUDEOIL":    "MCX_FO|565899",
+    "CRUDEOILM":   "MCX_FO|565900",
+    "NATURALGAS":  "MCX_FO|568245",
+    "NATGASMINI":  "MCX_FO|568246",
+    "NATGAS":      "MCX_FO|568245",
+    "NATGASM":     "MCX_FO|568246",
+    # Legacy / Index mappings
     "BANKNIFTY":   "NSE_INDEX|Nifty Bank",
-    "INDIA VIX":   "NSE_INDEX|India VIX",
     "SENSEX":      "BSE_INDEX|SENSEX",
     "BSE SENSEX":  "BSE_INDEX|SENSEX",
 }
@@ -72,12 +74,12 @@ UPSTOX_INSTRUMENT_CACHES = {
     for exchange in UPSTOX_INSTRUMENT_URLS
 }
 
-# Upstox interval mappings
+# Upstox interval mappings: HistoryApi accepts only (1minute, 30minute, day, week, month)
 INTERVAL_MAP = {
     "1minute":  "1minute",
     "3minute":  "1minute",
-    "5minute":  "5minute",
-    "15minute": "15minute",
+    "5minute":  "1minute",
+    "15minute": "1minute",
     "30minute": "30minute",
     "day":      "day",
 }
@@ -99,6 +101,9 @@ class UpstoxBroker(BaseBroker):
         self._fallback_broker = None
         self._lot_size_cache: dict[str, int] = {}
         self._instrument_key_cache: dict[str, str] = {}
+        self._instruments_cache: dict[str, pd.DataFrame] = {}
+        self._option_keys_cache: dict[Any, str] = {}
+        self._past_days_history_cache: dict[tuple, list] = {}
         self._preload_master_caches()
         os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 
@@ -114,30 +119,84 @@ class UpstoxBroker(BaseBroker):
         logger.info("[UpstoxBroker] Initialized.")
 
     def _preload_master_caches(self) -> None:
-        """Pre-load instrument lot sizes and keys into memory for 0.001ms order execution."""
+        """Pre-load instrument lot sizes and keys into memory for 0.001ms order execution and option resolution."""
         try:
             for ex in ["MCX", "NSE", "BSE"]:
                 cache_file = UPSTOX_INSTRUMENT_CACHES.get(ex)
                 if cache_file and cache_file.exists():
                     df = pd.read_parquet(cache_file)
-                    for _, r in df.iterrows():
-                        ik = str(r.get("instrument_key", "") or "")
-                        ts = str(r.get("trading_symbol", "") or "")
-                        ls = r.get("lot_size")
-                        if ls is not None:
-                            try:
-                                lot_int = int(float(ls))
-                                if lot_int > 0:
-                                    if ik:
-                                        self._lot_size_cache[ik] = lot_int
-                                    if ts:
-                                        self._lot_size_cache[ts] = lot_int
-                            except (ValueError, TypeError):
-                                pass
-                        if ts and ik:
-                            self._instrument_key_cache[ts] = ik
+                    self._instruments_cache[ex] = df
+                    self._index_instruments_dataframe(ex, df)
         except Exception as e:
             logger.debug(f"[UpstoxBroker] Master cache preload fail-open: {e}")
+
+    def _index_instruments_dataframe(self, exchange: str, df: pd.DataFrame) -> None:
+        """Vectorized in-memory indexing of lot sizes, instrument keys, and options."""
+        if df.empty:
+            return
+        try:
+            # Index lot sizes & instrument keys via itertuples (100x faster than iterrows)
+            for r in df[["instrument_key", "trading_symbol", "lot_size"]].itertuples(index=False):
+                ik = str(r[0] or "")
+                ts = str(r[1] or "")
+                ls = r[2]
+                if ls is not None:
+                    try:
+                        lot_int = int(float(ls))
+                        if lot_int > 0:
+                            if ik:
+                                self._lot_size_cache[ik] = lot_int
+                            if ts:
+                                self._lot_size_cache[ts] = lot_int
+                    except (ValueError, TypeError):
+                        pass
+                if ts and ik:
+                    self._instrument_key_cache[ts] = ik
+
+            # Pre-index option contracts for instantaneous O(1) resolution
+            if "instrument_type" in df.columns:
+                opt_mask = df["instrument_type"].astype(str).str.upper().isin(["CE", "PE"])
+                opt_df = df[opt_mask].copy()
+                if not opt_df.empty:
+                    raw_expiry = opt_df["expiry"]
+                    numeric_expiry = pd.to_numeric(raw_expiry, errors="coerce")
+                    if numeric_expiry.notna().any() and float(numeric_expiry.dropna().median() or 0.0) > 10000000000:
+                        opt_df["_exp_date"] = pd.to_datetime(numeric_expiry, errors="coerce", unit="ms").dt.date
+                    else:
+                        opt_df["_exp_date"] = pd.to_datetime(raw_expiry, errors="coerce").dt.date
+
+                    strike_col = "strike_price" if "strike_price" in opt_df.columns else ("strike" if "strike" in opt_df.columns else "")
+                    if strike_col:
+                        opt_df["_strike_val"] = pd.to_numeric(opt_df[strike_col], errors="coerce").round(2)
+                    else:
+                        opt_df["_strike_val"] = 0.0
+
+                    underlying_col = "underlying_symbol" if "underlying_symbol" in opt_df.columns else ("name" if "name" in opt_df.columns else "asset_symbol")
+                    opt_df["_underlying_val"] = opt_df[underlying_col].astype(str).str.upper()
+                    opt_df["_type_val"] = opt_df["instrument_type"].astype(str).str.upper()
+                    opt_df["_ts_val"] = opt_df["trading_symbol"].astype(str).str.upper()
+
+                    cols_to_use = ["_underlying_val", "_exp_date", "_strike_val", "_type_val", "instrument_key", "_ts_val"]
+                    if "name" in opt_df.columns and underlying_col != "name":
+                        opt_df["_name_val"] = opt_df["name"].astype(str).str.upper()
+                        cols_to_use.append("_name_val")
+
+                    for row in opt_df[cols_to_use].itertuples(index=False):
+                        und = row[0]
+                        exp = row[1]
+                        stk = float(row[2])
+                        itype = row[3]
+                        ikey = str(row[4])
+                        tsym = row[5]
+
+                        self._option_keys_cache[(und, exp, stk, itype)] = ikey
+                        self._option_keys_cache[tsym] = ikey
+                        self._option_keys_cache[tsym.replace(" ", "")] = ikey
+                        if len(row) > 6:
+                            name_val = row[6]
+                            self._option_keys_cache[(name_val, exp, stk, itype)] = ikey
+        except Exception as exc:
+            logger.debug(f"[UpstoxBroker] Error indexing {exchange} options: {exc}")
 
     @property
     def broker_name(self) -> str:
@@ -232,7 +291,7 @@ class UpstoxBroker(BaseBroker):
             return self._fallback_ltp(symbol)
         try:
             import upstox_client
-            key = UPSTOX_SYMBOL_MAP.get(symbol, symbol)
+            key = self.get_instrument_key(symbol)
             api = upstox_client.MarketQuoteApi(self._client)
             resp= api.get_full_market_quote(key, "2.0")
             data= resp.data
@@ -240,16 +299,69 @@ class UpstoxBroker(BaseBroker):
             resp_key = key.replace("|", ":")
             if data and resp_key in data:
                 last_price = float(data[resp_key].last_price or 0.0)
-                return last_price if last_price > 0 else self._fallback_ltp(symbol)
-            elif data and key in data:
+                if last_price > 0:
+                    return last_price
+            if data and key in data:
                 last_price = float(data[key].last_price or 0.0)
-                return last_price if last_price > 0 else self._fallback_ltp(symbol)
+                if last_price > 0:
+                    return last_price
+            if data:
+                for k, v in data.items():
+                    if hasattr(v, "last_price") and v.last_price:
+                        last_price = float(v.last_price or 0.0)
+                        if last_price > 0:
+                            return last_price
             return self._fallback_ltp(symbol)
         except Exception as e:
             if self._handle_auth_failure("get_ltp", e):
                 return self._fallback_ltp(symbol)
             logger.warning(f"[UpstoxBroker] get_ltp({symbol}): {e}")
             return self._fallback_ltp(symbol)
+
+    def get_quotes(self, symbols: list[str]) -> dict[str, float]:
+        """Fetch multiple LTPs in a single batch request via Upstox Market Quote API."""
+        if not self._can_use_upstox():
+            return {sym: self._fallback_ltp(sym) for sym in symbols}
+        try:
+            import upstox_client
+            key_to_sym = {}
+            unique_keys = []
+            for sym in symbols:
+                if sym in UPSTOX_FALLBACK_ONLY_SYMBOLS:
+                    continue
+                k = self.get_instrument_key(sym)
+                key_to_sym[k] = sym
+                key_to_sym[k.replace("|", ":")] = sym
+                if k not in unique_keys:
+                    unique_keys.append(k)
+
+            if not unique_keys:
+                return {sym: self._fallback_ltp(sym) for sym in symbols}
+
+            api = upstox_client.MarketQuoteApi(self._client)
+            resp = api.get_full_market_quote(",".join(unique_keys), "2.0")
+            data = resp.data or {}
+            results = {}
+            for resp_key, item in data.items():
+                lp = float(getattr(item, "last_price", 0.0) or 0.0)
+                inst_token = getattr(item, "instrument_token", "") or ""
+                sym_str = getattr(item, "symbol", "") or ""
+                orig_sym = key_to_sym.get(inst_token) or key_to_sym.get(resp_key)
+                if not orig_sym:
+                    for s in symbols:
+                        if f":{s}" in resp_key or f"|{s}" in resp_key or sym_str.startswith(s):
+                            orig_sym = s
+                            break
+                if orig_sym and lp > 0:
+                    results[orig_sym] = lp
+
+            for sym in symbols:
+                if sym not in results:
+                    results[sym] = self._fallback_ltp(sym)
+            return results
+        except Exception as e:
+            logger.debug(f"[UpstoxBroker] get_quotes batch error, falling back: {e}")
+            return {sym: self.get_ltp(sym) for sym in symbols}
 
     def get_historical_data(
         self, symbol: str, interval: str,
@@ -263,56 +375,74 @@ class UpstoxBroker(BaseBroker):
             return self._fallback_historical(symbol, interval, from_date, to_date)
         try:
             import upstox_client
-            key      = UPSTOX_SYMBOL_MAP.get(symbol, symbol)
-            upstox_interval = INTERVAL_MAP.get(interval, "5minute")
+            key = self.get_instrument_key(symbol)
             
-            req_interval = interval
             resample_rule = None
             if interval == "3minute":
-                req_interval = "1minute"
+                upstox_interval = "1minute"
                 resample_rule = "3min"
             elif interval == "5minute":
-                req_interval = "1minute"
+                upstox_interval = "1minute"
                 resample_rule = "5min"
             elif interval == "15minute":
-                req_interval = "1minute"
+                upstox_interval = "1minute"
                 resample_rule = "15min"
-
-            # Upstox needs unit (days/minutes) separate from interval
-            if "minute" in upstox_interval:
-                unit   = "minutes"
-                unit_n = int(upstox_interval.replace("minute", ""))
             else:
-                unit   = "days"
-                unit_n = 1
+                upstox_interval = INTERVAL_MAP.get(interval, "1minute")
 
-            upstox_interval = INTERVAL_MAP.get(req_interval, req_interval)
             api      = upstox_client.HistoryApi(self._client)
 
-            # Upstox HistoryApi expects positional args in current SDK:
-            # (instrument_key, interval, to_date, from_date, api_version)
-            resp = api.get_historical_candle_data1(
-                key,
-                upstox_interval,
-                to_date,
-                from_date,
-                "2.0",
-            )
-
-            candles = resp.data.candles or []
-
-            # FIX: If we need data for today, Upstox historical API might not have it yet.
-            # We must explicitly fetch from the intraday endpoint and merge.
             today_str = datetime.now(IST).strftime("%Y-%m-%d")
-            if to_date >= today_str and upstox_interval in ["1minute", "30minute"]:
-                try:
-                    intra_resp = api.get_intra_day_candle_data(key, upstox_interval, "2.0")
-                    intra_candles = intra_resp.data.candles or []
-                    if intra_candles:
-                        # Merge and allow sort_index to handle order
-                        candles.extend(intra_candles)
-                except Exception as intra_err:
-                    logger.warning(f"[UpstoxBroker] Intraday fetch failed: {intra_err}")
+            candles = []
+
+            if to_date >= today_str:
+                # If range spans before today, fetch/cache past historical days once
+                if from_date < today_str:
+                    yesterday_dt = datetime.now(IST) - timedelta(days=1)
+                    yesterday_str = yesterday_dt.strftime("%Y-%m-%d")
+                    cache_key = (key, upstox_interval, from_date, yesterday_str)
+                    if cache_key in self._past_days_history_cache:
+                        candles.extend(self._past_days_history_cache[cache_key])
+                    else:
+                        try:
+                            resp = api.get_historical_candle_data1(
+                                key,
+                                upstox_interval,
+                                yesterday_str,
+                                from_date,
+                                "2.0",
+                            )
+                            past_candles = resp.data.candles or []
+                            if past_candles:
+                                self._past_days_history_cache[cache_key] = past_candles
+                                candles.extend(past_candles)
+                        except Exception as hist_err:
+                            logger.debug(f"[UpstoxBroker] Past days fetch failed: {hist_err}")
+
+                # Fetch today's live intraday candles (fast, ~50ms)
+                if upstox_interval in ["1minute", "30minute"]:
+                    try:
+                        intra_resp = api.get_intra_day_candle_data(key, upstox_interval, "2.0")
+                        intra_candles = intra_resp.data.candles or []
+                        if intra_candles:
+                            candles.extend(intra_candles)
+                    except Exception as intra_err:
+                        logger.warning(f"[UpstoxBroker] Intraday fetch failed: {intra_err}")
+                elif not candles:
+                    try:
+                        resp = api.get_historical_candle_data1(key, upstox_interval, to_date, from_date, "2.0")
+                        candles.extend(resp.data.candles or [])
+                    except Exception:
+                        pass
+            else:
+                resp = api.get_historical_candle_data1(
+                    key,
+                    upstox_interval,
+                    to_date,
+                    from_date,
+                    "2.0",
+                )
+                candles = resp.data.candles or []
 
             if not candles:
                 if interval == "day":
@@ -336,6 +466,7 @@ class UpstoxBroker(BaseBroker):
             df = df[~df.index.duplicated(keep='last')]
             
             if resample_rule:
+                max_source_ts = df.index[-1] if not df.empty else None
                 df = df.resample(resample_rule).agg({
                     "open": "first",
                     "high": "max",
@@ -343,6 +474,14 @@ class UpstoxBroker(BaseBroker):
                     "close": "last",
                     "volume": "sum"
                 }).dropna()
+                # Drop trailing incomplete candle in live session so candle is only published when complete
+                if to_date >= today_str and not df.empty and max_source_ts is not None:
+                    minutes_map = {"1min": 1, "3min": 3, "5min": 5, "15min": 15, "30min": 30}
+                    req_mins = minutes_map.get(resample_rule, 5)
+                    last_bucket_ts = df.index[-1]
+                    req_complete_ts = last_bucket_ts + timedelta(minutes=req_mins - 1)
+                    if max_source_ts < req_complete_ts:
+                        df = df.iloc[:-1]
                 
             if interval != "day":
                 df = df.between_time("09:00", "23:55")
@@ -375,11 +514,16 @@ class UpstoxBroker(BaseBroker):
             # Fallback A: Try direct symbol format if key resolution failed (robustness)
             try:
                 api = upstox_client.MarketQuoteApi(self._client)
-                key_alt = f"NSE_FO:{option_symbol}"
-                resp = api.get_full_market_quote(key_alt, "2.0")
-                if resp.data and key_alt in resp.data:
-                    return float(resp.data[key_alt].last_price)
-            except: pass
+                prefixes = ("MCX_FO:", "NSE_FO:") if any(k in str(option_symbol).upper() for k in ("SILVER", "GOLD", "CRUDE", "NAT")) else ("NSE_FO:", "MCX_FO:")
+                for prefix in prefixes:
+                    key_alt = f"{prefix}{option_symbol}"
+                    resp = api.get_full_market_quote(key_alt, "2.0")
+                    if resp.data and key_alt in resp.data:
+                        lp = float(resp.data[key_alt].last_price or 0.0)
+                        if lp > 0:
+                            return lp
+            except Exception:
+                pass
 
             # Fallback B: Extract info and use option chain (slow but reliable for missing master-list keys)
             m = re.match(r"^([A-Z]+)(\d{2}[A-Z]{3}\d{2})(\d+)(CE|PE)$", str(option_symbol).upper())
@@ -688,7 +832,7 @@ class UpstoxBroker(BaseBroker):
             return []
 
         trading_symbols = {
-            strike: build_option_symbol(symbol, expiry, strike, option_type)
+            strike: _build_option_symbol_compat(symbol, expiry, strike, option_type)
             for strike in strikes
         }
 
@@ -708,7 +852,7 @@ class UpstoxBroker(BaseBroker):
                     option_type=option_type,
                     trading_symbol=trading_symbol,
                 )
-                or f"{'BFO' if str(symbol).upper() == 'SENSEX' else 'NSE_FO'}|{trading_symbol}"
+                or f"{'BFO' if str(symbol).upper() == 'SENSEX' else ('MCX_FO' if any(k in str(symbol).upper() for k in ('SILVER', 'GOLD', 'CRUDE', 'NAT')) else 'NSE_FO')}|{trading_symbol}"
             )
             for strike, trading_symbol in trading_symbols.items()
         }
@@ -851,19 +995,39 @@ class UpstoxBroker(BaseBroker):
         option_type: str,
         trading_symbol: str,
     ) -> str:
+        sym_clean = str(symbol or "SILVERM").upper().strip()
+        opt_type_clean = str(option_type or "").upper().strip()
+        stk_float = float(strike)
+        ts_clean = str(trading_symbol or "").upper().strip()
+        compact_ts = ts_clean.replace(" ", "")
+
+        # 1. Fast O(1) in-memory cache lookup
+        cache_key = (sym_clean, expiry_date, stk_float, opt_type_clean)
+        if cache_key in self._option_keys_cache:
+            return self._option_keys_cache[cache_key]
+        if ts_clean in self._option_keys_cache:
+            return self._option_keys_cache[ts_clean]
+        if compact_ts in self._option_keys_cache:
+            return self._option_keys_cache[compact_ts]
+
+        # Check for commodity underlyings where SILVERM/SILVERMIC might map to SILVER in master
+        if sym_clean in ("SILVERM", "SILVERMIC"):
+            alt_key = ("SILVER", expiry_date, stk_float, opt_type_clean)
+            if alt_key in self._option_keys_cache:
+                return self._option_keys_cache[alt_key]
+
         df = self._load_upstox_instruments(symbol=symbol)
         if df.empty or "instrument_key" not in df.columns:
+            self._option_keys_cache[cache_key] = ""
             return ""
 
         work = df
-        symbol = str(symbol or "NIFTY").upper()
-        option_type = str(option_type or "").upper()
         mask = pd.Series(True, index=work.index)
 
         if "segment" in work.columns:
             mask &= work["segment"].astype(str).str.upper().str.contains("FO", na=False)
         if "instrument_type" in work.columns:
-            mask &= work["instrument_type"].astype(str).str.upper().eq(option_type)
+            mask &= work["instrument_type"].astype(str).str.upper().eq(opt_type_clean)
         if "expiry" in work.columns:
             raw_expiry = work["expiry"]
             numeric_expiry = pd.to_numeric(raw_expiry, errors="coerce")
@@ -875,13 +1039,21 @@ class UpstoxBroker(BaseBroker):
         strike_col = "strike_price" if "strike_price" in work.columns else ("strike" if "strike" in work.columns else "")
         if strike_col:
             strike_values = pd.to_numeric(work[strike_col], errors="coerce")
-            mask &= strike_values.round(2).eq(float(strike))
+            mask &= strike_values.round(2).eq(stk_float)
 
-        # Enforce exact underlying name match to prevent substring clashes (e.g. NIFTY matching FINNIFTY/BANKNIFTY)
+        # Enforce underlying match
         name_matched = False
-        for name_col in ("name", "underlying_symbol", "asset_symbol"):
+        match_symbols = [sym_clean]
+        if sym_clean in ("SILVERM", "SILVERMIC"):
+            match_symbols.append("SILVER")
+        elif sym_clean == "CRUDEOILM":
+            match_symbols.append("CRUDEOIL")
+        elif sym_clean == "NATGASMINI":
+            match_symbols.append("NATURALGAS")
+
+        for name_col in ("underlying_symbol", "name", "asset_symbol"):
             if name_col in work.columns:
-                exact_name_mask = work[name_col].astype(str).str.strip().str.upper().eq(symbol)
+                exact_name_mask = work[name_col].astype(str).str.strip().str.upper().isin(match_symbols)
                 if exact_name_mask.any():
                     mask &= exact_name_mask
                     name_matched = True
@@ -897,43 +1069,52 @@ class UpstoxBroker(BaseBroker):
             ]
             if text_cols:
                 text_mask = pd.Series(False, index=work.index)
-                compact_symbol = str(trading_symbol or "").upper().replace(" ", "")
                 for col in text_cols:
                     text = work[col].astype(str).str.upper()
-                    text_mask |= text.str.startswith(symbol + " ", na=False) | text.str.eq(symbol)
-                    text_mask |= text.str.replace(" ", "", regex=False).str.contains(compact_symbol, na=False)
+                    text_mask |= text.str.startswith(sym_clean + " ", na=False) | text.str.eq(sym_clean)
+                    text_mask |= text.str.replace(" ", "", regex=False).str.contains(compact_ts, na=False)
                 mask &= text_mask
 
         matches = work[mask]
         if matches.empty:
             logger.debug(
-                f"[UpstoxBroker] Option instrument key not found in cache | "
+                f"[UpstoxBroker] Option instrument key not found | "
                 f"{trading_symbol} expiry={expiry_date} strike={strike} type={option_type}"
             )
-            # One-time force reload from live Upstox master if not found
-            df_fresh = self._load_upstox_instruments(symbol=symbol, force_reload=True)
-            if not df_fresh.empty and not df_fresh.equals(df):
-                return self._resolve_option_instrument_key(
-                    symbol=symbol,
-                    expiry_date=expiry_date,
-                    strike=strike,
-                    option_type=option_type,
-                    trading_symbol=trading_symbol,
-                )
+            self._option_keys_cache[cache_key] = ""
             return ""
-        return str(matches.iloc[0].get("instrument_key", "") or "")
 
-    def _load_upstox_instruments(self, symbol: str = "NIFTY", force_reload: bool = False) -> pd.DataFrame:
-        exchange = "BSE" if str(symbol or "").upper() == "SENSEX" else "NSE"
+        res_key = str(matches.iloc[0].get("instrument_key", "") or "")
+        self._option_keys_cache[cache_key] = res_key
+        if ts_clean:
+            self._option_keys_cache[ts_clean] = res_key
+        if compact_ts:
+            self._option_keys_cache[compact_ts] = res_key
+        return res_key
+
+    def _load_upstox_instruments(self, symbol: str = "SILVERM", force_reload: bool = False) -> pd.DataFrame:
+        sym_upper = str(symbol or "SILVERM").upper().strip()
+        if sym_upper == "SENSEX":
+            exchange = "BSE"
+        elif any(k in sym_upper for k in ("SILVER", "GOLD", "CRUDE", "NAT", "MCX")) or sym_upper in UPSTOX_SYMBOL_MAP:
+            exchange = "MCX"
+        else:
+            exchange = "NSE"
         cache_path = UPSTOX_INSTRUMENT_CACHES[exchange]
         url = UPSTOX_INSTRUMENT_URLS[exchange]
+
+        if not force_reload and exchange in self._instruments_cache:
+            return self._instruments_cache[exchange]
 
         if not force_reload and cache_path.exists():
             try:
                 import time as _t
                 cache_age_hours = (_t.time() - cache_path.stat().st_mtime) / 3600.0
                 if cache_age_hours < 12.0:
-                    return pd.read_parquet(cache_path)
+                    df = pd.read_parquet(cache_path)
+                    self._instruments_cache[exchange] = df
+                    self._index_instruments_dataframe(exchange, df)
+                    return df
                 logger.info(
                     f"[UpstoxBroker] Instrument cache is {cache_age_hours:.1f}h old; refreshing {exchange} master"
                 )
@@ -952,6 +1133,8 @@ class UpstoxBroker(BaseBroker):
             if not df.empty:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 df.to_parquet(cache_path, index=False)
+                self._instruments_cache[exchange] = df
+                self._index_instruments_dataframe(exchange, df)
                 logger.info(
                     f"[UpstoxBroker] Cached Upstox {exchange} instruments | rows={len(df)} | "
                     f"path={cache_path}"
@@ -961,7 +1144,10 @@ class UpstoxBroker(BaseBroker):
             logger.warning(f"[UpstoxBroker] Upstox instrument master unavailable: {exc}")
             if cache_path.exists():
                 try:
-                    return pd.read_parquet(cache_path)
+                    df = pd.read_parquet(cache_path)
+                    self._instruments_cache[exchange] = df
+                    self._index_instruments_dataframe(exchange, df)
+                    return df
                 except Exception:
                     pass
         return pd.DataFrame()

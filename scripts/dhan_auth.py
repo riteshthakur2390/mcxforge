@@ -76,7 +76,7 @@ DHAN_BASE    = "https://api.dhan.co"
 # ═══════════════════════════════════════════════════════════════════════════
 print()
 print("╔════════════════════════════════════════════════╗")
-print("║   SignalForge — Dhan HQ Credential Setup       ║")
+print("║   MCXForge — Dhan HQ Credential Setup          ║")
 print(f"║   {datetime.now(IST).strftime('%Y-%m-%d  %H:%M IST')}                        ║")
 print("╚════════════════════════════════════════════════╝")
 print()
@@ -275,7 +275,7 @@ def main():
     client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
     access_token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
 
-    print("\nSignalForge — Dhan Auth Verification")
+    print("\nMCXForge — Dhan Auth Verification")
     print("━" * 50)
 
     # STEP 1

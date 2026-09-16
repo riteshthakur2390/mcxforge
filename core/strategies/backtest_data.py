@@ -51,7 +51,7 @@ class HistoricalDataLoader:
         default_timezone: str = "Asia/Kolkata",
         auto_sort: bool = True,
         deduplicate: bool = True,
-        auto_repair: bool = True,
+        auto_repair: bool = False,
     ) -> pd.DataFrame:
         """
         Loads and validates historical data from a CSV file path or existing DataFrame.

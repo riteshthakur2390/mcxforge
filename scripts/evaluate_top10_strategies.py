@@ -29,7 +29,8 @@ from core.strategies.backtest_data import HistoricalDataLoader, resample_ohlcv
 
 def main():
     loader = HistoricalDataLoader()
-    df_5m = loader.load("data/historical/SILVERMIC_dhan_5m.csv")
+    csv_p = "data/historical/SILVERM_dhan_5m.csv" if Path("data/historical/SILVERM_dhan_5m.csv").exists() else "data/historical/SILVERMIC_dhan_5m.csv"
+    df_5m = loader.load(csv_p)
     df_1h = resample_ohlcv(df_5m, "1h")
     df_30m = resample_ohlcv(df_5m, "30m")
 

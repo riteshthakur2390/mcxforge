@@ -92,3 +92,54 @@ def test_missing_option_candle_close_keeps_quote_price():
     )
 
     assert exit_price == 116.3
+
+
+def test_buy_put_option_position_is_long_and_not_inverted():
+    signal = RawSignal(
+        symbol="SILVERM",
+        direction=Direction.BUY_PUT,
+        confidence=0.95,
+        votes=5,
+        strategies_fired=["TrendFollowing"],
+        nifty_ltp=237306.0,
+    )
+    plan = TradePlan(
+        signal=signal,
+        option_symbol="SILVERM-24Sep2026-237000-PE",
+        strike=237000,
+        option_type="PE",
+        expiry_date="2026-09-24",
+        days_to_expiry=14,
+        est_premium=4527.7,
+        sl_premium=3395.4,
+        target_premium=6066.4,
+        lot_size=5,
+        quantity=5,
+    )
+    pos = Position(
+        plan=plan,
+        entry_premium=4527.7,
+        is_simulated=True,
+        execution_mode="OBSERVE",
+    )
+    # Option buyers are long the contract
+    assert plan.is_long is True
+    assert plan.is_short is False
+    assert pos.is_long is True
+    assert pos.is_short is False
+
+    # When premium rises, profit is positive
+    pos.current_premium = 5000.0
+    assert pos.pnl_points == round(5000.0 - 4527.7, 2)
+    assert pos.pnl_pct > 0
+
+    # When premium drops, profit is negative
+    pos.current_premium = 4152.8
+    assert pos.pnl_points == round(4152.8 - 4527.7, 2)
+    assert pos.pnl_pct < 0
+
+    # Peak premium tracks higher prices, not lower
+    pos.update(4600.0)
+    assert pos.peak_premium == 4600.0
+    pos.update(4200.0)
+    assert pos.peak_premium == 4600.0

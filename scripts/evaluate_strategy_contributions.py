@@ -21,7 +21,8 @@ from core.strategies.backtest_data import HistoricalDataLoader, resample_ohlcv
 
 def main():
     loader = HistoricalDataLoader()
-    df_5m = loader.load("data/historical/SILVERMIC_dhan_5m.csv")
+    csv_p = "data/historical/SILVERM_dhan_5m.csv" if Path("data/historical/SILVERM_dhan_5m.csv").exists() else "data/historical/SILVERMIC_dhan_5m.csv"
+    df_5m = loader.load(csv_p)
     timeframes = ["5m", "15m", "30m", "1h"]
 
     print("=" * 100)
@@ -172,7 +173,23 @@ def main():
     ens_df.to_csv("backtests/MCXFORGE_ENSEMBLE_REPORT/ensemble_tf_comparison.csv", index=False)
     val_df.to_csv("backtests/MCXFORGE_ENSEMBLE_REPORT/value_adding_ensemble_comparison.csv", index=False)
     print("\nSaved detailed sweep datasets to backtests/MCXFORGE_ENSEMBLE_REPORT/")
-    print("\nSaved detailed sweep datasets to backtests/MCXFORGE_ENSEMBLE_REPORT/")
+
+    # Optional Telegram Notification
+    try:
+        from utils.telegram_notifier import get_notifier
+        notifier = get_notifier()
+        best_row = ens_df.sort_values(by="net_pnl", ascending=False).iloc[0] if not ens_df.empty else None
+        best_info = f"Best TF: {best_row['timeframe']} | Net P&L: ₹{best_row['net_pnl']:,.2f} | PF: {best_row['profit_factor']}" if best_row is not None else "Completed"
+        msg = (
+            f"📊 *MCXForge — Strategy Evaluation Complete*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Strategies Evaluated: {len(suite)}\n"
+            f"{best_info}\n"
+            f"Reports saved to MCXFORGE_ENSEMBLE_REPORT"
+        )
+        notifier.send_text_sync(msg, target="BACKTEST", parse_mode=None)
+    except Exception as exc:
+        print(f"Telegram notification skipped: {exc}")
 
 if __name__ == "__main__":
     main()

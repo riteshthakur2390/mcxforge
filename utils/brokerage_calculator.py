@@ -143,7 +143,8 @@ def calculate_option_trade_charges(
     total_turnover = entry_val + exit_val
 
     brokerage = round(order_brokerage * orders_count, 2)
-    stt = round(exit_val * 0.0010, 2)
+    # CTT on commodity options / STT on equity options: 0.125% on sell premium
+    stt = round(exit_val * 0.00125, 2)
     exchange_charges = round(total_turnover * 0.00050, 2)
     sebi_charges = round(total_turnover * 0.000001, 2)
     stamp_duty = round(entry_val * 0.00003, 2)

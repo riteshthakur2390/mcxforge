@@ -29,7 +29,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import pytz
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -283,19 +283,49 @@ def run_historical_shadow_replay(
     ]
 
     # Write CSVs
-    def write_csv(path: Path, data: List[dict]):
+    def write_csv(path: Path, data: List[dict], default_headers: Optional[List[str]] = None):
         if data:
-            with open(path, "w", newline="") as fp:
-                writer = csv.DictWriter(fp, fieldnames=list(data[0].keys()))
-                writer.writeheader()
+            fieldnames = list(data[0].keys())
+        elif default_headers:
+            fieldnames = default_headers
+        else:
+            fieldnames = ["status"]
+        with open(path, "w", newline="") as fp:
+            writer = csv.DictWriter(fp, fieldnames=fieldnames)
+            writer.writeheader()
+            if data:
                 writer.writerows(data)
 
-    write_csv(out_path / "historical_shadow_replay_session_summary.csv", session_summary_records)
-    write_csv(out_path / "historical_shadow_replay_candidate_parity.csv", candidate_parity_records)
-    write_csv(out_path / "historical_shadow_replay_state_parity.csv", state_parity_records)
-    write_csv(out_path / "historical_shadow_replay_entry_parity.csv", entry_parity_records)
-    write_csv(out_path / "historical_shadow_replay_outcome_parity.csv", outcome_parity_records)
-    write_csv(out_path / "historical_shadow_replay_mismatches.csv", mismatch_records if mismatch_records else [{"mismatch_type": "NONE", "count": 0, "root_cause": "N/A"}])
+    write_csv(
+        out_path / "historical_shadow_replay_session_summary.csv",
+        session_summary_records,
+        ["session_date", "signals_processed", "medium_quality_candidates", "pending_setups_created", "shadow_entries", "invalidated", "expired", "missed_continuations", "ambiguous_sequences", "unmatched_records", "parity_rate_pct"]
+    )
+    write_csv(
+        out_path / "historical_shadow_replay_candidate_parity.csv",
+        candidate_parity_records,
+        ["signal_id", "session_date", "quality_classification", "expected_state", "actual_state", "parity_classification"]
+    )
+    write_csv(
+        out_path / "historical_shadow_replay_state_parity.csv",
+        state_parity_records,
+        ["state", "total_occurrences", "parity_rate_pct"]
+    )
+    write_csv(
+        out_path / "historical_shadow_replay_entry_parity.csv",
+        entry_parity_records,
+        ["signal_id", "session_date", "entry_price", "actual_entry_price", "parity_match"]
+    )
+    write_csv(
+        out_path / "historical_shadow_replay_outcome_parity.csv",
+        outcome_parity_records,
+        ["signal_id", "session_date", "theoretical_pnl", "shadow_pnl", "pnl_match"]
+    )
+    write_csv(
+        out_path / "historical_shadow_replay_mismatches.csv",
+        mismatch_records if mismatch_records else [{"mismatch_type": "NONE", "count": 0, "root_cause": "N/A"}],
+        ["mismatch_type", "count", "root_cause"]
+    )
 
     # Summary JSON
     summary_data = {

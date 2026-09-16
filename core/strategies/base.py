@@ -200,20 +200,28 @@ class BaseCommodityStrategy(ABC):
             return signal
 
         if regime_details:
-            if regime_details.regime == MarketRegime.ABNORMAL:
-                signal.rejection_reason = f"REGIME_ABNORMAL_VETO: {','.join(regime_details.reasons)}"
-                signal.decision = "ABNORMAL"
-                signal.is_valid = False
-                return signal
-
-            if regime_details.regime not in self.permitted_regimes:
-                signal.rejection_reason = (
-                    f"REGIME_INCOMPATIBLE: Strategy '{self.name}' requires {[r.value for r in self.permitted_regimes]}, "
-                    f"got {regime_details.regime.value}"
+            r_obj = getattr(regime_details, "regime", None) or (
+                regime_details.get("regime") if isinstance(regime_details, dict) else None
+            )
+            if r_obj:
+                r_val = r_obj.value if hasattr(r_obj, "value") else str(r_obj)
+                reasons = getattr(regime_details, "reasons", []) if hasattr(regime_details, "reasons") else (
+                    regime_details.get("reasons", []) if isinstance(regime_details, dict) else []
                 )
-                signal.decision = "NO_TRADE"
-                signal.is_valid = False
-                return signal
+                if r_val == MarketRegime.ABNORMAL.value or r_obj == MarketRegime.ABNORMAL:
+                    signal.rejection_reason = f"REGIME_ABNORMAL_VETO: {','.join(reasons)}"
+                    signal.decision = "ABNORMAL"
+                    signal.is_valid = False
+                    return signal
+
+                permitted = [r.value if hasattr(r, "value") else str(r) for r in self.permitted_regimes]
+                if r_val not in permitted and r_obj not in self.permitted_regimes:
+                    signal.rejection_reason = (
+                        f"REGIME_INCOMPATIBLE: Strategy '{self.name}' requires {permitted}, got {r_val}"
+                    )
+                    signal.decision = "NO_TRADE"
+                    signal.is_valid = False
+                    return signal
 
         # Validate minimum distance for stop loss and target
         if signal.entry_price > 0 and signal.stop_loss > 0:
@@ -346,23 +354,81 @@ class BaseCommodityStrategy(ABC):
 
         return None
 
-    def evaluate(self, df: pd.DataFrame, **kwargs) -> dict:
+    def evaluate(
+        self,
+        df: pd.DataFrame,
+        orb_high: Optional[float] = None,
+        orb_low: Optional[float] = None,
+        cache: Any = None,
+        **kwargs
+    ) -> dict:
         """
         Compatibility adapter for legacy multi-strategy consensus runner.
         """
         contract = kwargs.get("contract")
         regime_details = kwargs.get("regime_details")
-        signal = self.generate_signal(df, current_contract=contract, regime_details=regime_details)
-        signal = self.validate_signal(signal, regime_details=regime_details)
+        if isinstance(regime_details, dict):
+            reg_val = str(regime_details.get("regime", regime_details.get("regime_label", "RANGE"))).upper()
+            if "TREND" in reg_val:
+                market_regime = MarketRegime.TREND
+            elif "BREAKOUT" in reg_val:
+                market_regime = MarketRegime.BREAKOUT
+            elif "HIGH_VOL" in reg_val:
+                market_regime = MarketRegime.HIGH_VOLATILITY
+            elif "LOW_VOL" in reg_val:
+                market_regime = MarketRegime.LOW_VOLATILITY
+            elif "ABNORMAL" in reg_val:
+                market_regime = MarketRegime.ABNORMAL
+            else:
+                market_regime = MarketRegime.RANGE
+
+            regime_details = RegimeDetails(
+                regime=market_regime,
+                confidence=float(regime_details.get("confidence", 0.80) or 0.80),
+                adx=float(regime_details.get("adx", 20.0) or 20.0),
+                atr=float(regime_details.get("atr", 25.0) or 25.0),
+                choppiness=float(regime_details.get("chop_index", regime_details.get("choppiness", 50.0)) or 50.0),
+                is_tradeable=bool(regime_details.get("is_tradeable", True)),
+                reasons=list(regime_details.get("reasons", []) or []),
+            )
+            kwargs["regime_details"] = regime_details
+        try:
+            signal = self.generate_signal(
+                df,
+                current_contract=contract,
+                regime_details=regime_details,
+                orb_high=orb_high,
+                orb_low=orb_low,
+                cache=cache,
+                **kwargs
+            )
+        except TypeError:
+            try:
+                signal = self.generate_signal(df, current_contract=contract, regime_details=regime_details)
+            except TypeError:
+                try:
+                    signal = self.generate_signal(df, regime_details=regime_details)
+                except TypeError:
+                    signal = self.generate_signal(df)
+        try:
+            signal = self.validate_signal(signal, regime_details=regime_details)
+        except TypeError:
+            signal = self.validate_signal(signal)
+
+        direction = signal.direction if signal and signal.is_valid else Direction.NONE
+        if direction in (Direction.BUY, "BUY"):
+            direction = Direction.BUY_CALL
+        elif direction in (Direction.SELL, "SELL"):
+            direction = Direction.BUY_PUT
 
         return {
             "name": self.name,
-            "direction": signal.direction,
-            "confidence": signal.confidence if signal.is_valid else 0.0,
-            "entry_price": signal.entry_price,
-            "stop_loss": signal.stop_loss,
-            "target": signal.target,
-            "decision": signal.decision,
-            "rejection_reason": signal.rejection_reason,
+            "direction": direction,
+            "confidence": float(signal.confidence if (signal and signal.is_valid) else 0.0),
+            "entry_price": float(signal.entry_price if signal else 0.0),
+            "stop_loss": float(signal.stop_loss if signal else 0.0),
+            "target": float(signal.target if signal else 0.0),
+            "decision": str(signal.decision if signal else "WAIT"),
+            "rejection_reason": str(signal.rejection_reason if signal else ""),
             "signal_object": signal,
         }

@@ -74,6 +74,22 @@ def test_mcx_futures_greeks_filter_bypasses_options_math():
     assert "futures" in result["reason"].lower()
 
 
+def test_mcx_silver_options_greeks_filter_supports_high_premium():
+    flt = GreeksFilter()
+    # Silver option with LTP ~240,000, strike 243000, PE premium ~4700, DTE=14
+    result = flt.check(
+        nifty_ltp=240500.0,
+        strike=243000,
+        opt_type="PE",
+        est_premium=4700.0,
+        dte=14,
+    )
+    assert result.tradeable is True
+    assert result.est_delta < -0.30
+    assert result.est_theta_day > 8.0  # Theta is ~30-45 Rs/day, which exceeds Nifty Rs 8 ceiling
+    assert "too much time decay" not in result.reason
+
+
 def test_mcx_futures_position_sizer_margin_based():
     res = size_by_delta(
         premium=75000.0,

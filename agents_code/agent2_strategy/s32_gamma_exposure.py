@@ -26,9 +26,9 @@ except ImportError:
 try:
     from instruments.registry import get_instrument_config
     _cfg = get_instrument_config("SILVERM")
-    COMMODITY_STRIKE_STEP = getattr(_cfg, "strike_step", 500) or 500
+    COMMODITY_STRIKE_STEP = getattr(_cfg, "strike_step", 1000) or 1000
 except Exception:
-    COMMODITY_STRIKE_STEP = 500
+    COMMODITY_STRIKE_STEP = 1000
 
 MIN_CANDLES = 15
 GEX_WALL_DIST_PCT = 0.3   # within 0.3% of GEX wall

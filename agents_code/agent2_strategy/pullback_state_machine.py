@@ -184,7 +184,7 @@ class PullbackShadowStateMachine:
 
         setup = PendingPullbackSetup(
             signal_id=signal_id,
-            instrument=str(signal_data.get("symbol", "NIFTY")),
+            instrument=str(signal_data.get("symbol") or os.getenv("INSTRUMENT", "SILVERM")),
             direction=direction,
             original_signal_timestamp=current_ts.isoformat(),
             signal_price=signal_price,

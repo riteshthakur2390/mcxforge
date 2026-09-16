@@ -118,19 +118,22 @@ class CalendarSeasonalityStrategy(BaseCommodityStrategy):
         conf = 0.0
         reason = ""
 
-        # Pre-Diwali Bullish Accumulation
-        if is_diwali_window and c >= ema * 0.995:
+        ema_prev = float(ind["trend_ema"].iloc[-2]) if len(ind) >= 2 else ema
+        trend_aligned = (c >= ema and ema >= ema_prev)
+
+        # Pre-Diwali Bullish Accumulation (requires trend alignment)
+        if is_diwali_window and trend_aligned:
             sig_dir = Direction.BUY
             conf = 0.78
-            reason = f"Pre-Diwali physical demand accumulation window (Month {m}, Day {d})"
+            reason = f"Pre-Diwali physical demand accumulation window with trend alignment (Month {m}, Day {d})"
             sl = self.round_to_tick(c - (atr * sl_mult))
             target = self.round_to_tick(c + (atr * tgt_mult))
 
-        # Spring Bullion Festive Window
-        elif is_spring_window and c >= ema * 0.995:
+        # Spring Bullion Festive Window (requires trend alignment)
+        elif is_spring_window and trend_aligned:
             sig_dir = Direction.BUY
             conf = 0.72
-            reason = f"Akshaya Tritiya spring bullion window (Month {m}, Day {d})"
+            reason = f"Akshaya Tritiya spring bullion window with trend alignment (Month {m}, Day {d})"
             sl = self.round_to_tick(c - (atr * sl_mult))
             target = self.round_to_tick(c + (atr * tgt_mult))
 

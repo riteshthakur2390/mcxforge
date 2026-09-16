@@ -307,72 +307,58 @@ class AnalyticsAgent:
         day_note = "" if is_open else " ⏸️ (Weekend / Market Closed)"
 
         bias    = msg.payload.get("bias", "NEUTRAL")
-        raw_vix = float(msg.payload.get("india_vix") or msg.payload.get("vix") or 0.0)
-        vix     = raw_vix if 8.0 <= raw_vix <= 80.0 else 14.0
-        vix_note = "" if 8.0 <= raw_vix <= 80.0 else " (fallback)"
         gap_pct = float(msg.payload.get("gap_pct", 0))
-        prev_close = float(msg.payload.get("prev_close", msg.payload.get("nifty_prev_close", 0)) or 0)
-        today_open = float(msg.payload.get("today_open", 0) or 0)
+        prev_close = float(msg.payload.get("prev_close") or msg.payload.get("nifty_prev_close") or 0)
+        today_open = float(msg.payload.get("today_open") or 0)
         gap_ready = bool(msg.payload.get("gap_ready", False))
         mode = TRADING_MODE
+        symbol = str(msg.payload.get("symbol") or os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+        sym_desc = "Silver Mini Futures" if symbol == "SILVERM" else ("Silver Micro Futures" if symbol == "SILVERMIC" else f"{symbol} Futures")
 
         brief = (
             f"🛡️ *MCXForge Daily Market Brief*\n"
             f"📅 {now_dt.strftime('%d %b %Y')}{day_note}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 Commodity: *SILVERM* (Silver Micro Futures)\n"
+            f"🎯 Commodity: *{symbol}* ({sym_desc})\n"
             f"⚙️ Execution Mode: *{mode}* (Simulated Paper Trading)\n"
             f"🌐 Bias: *{bias}* | Gap: {gap_pct:+.2f}%\n"
-            f"📊 Prev Close: {prev_close:.2f} | Open: {today_open:.2f}\n"
-            f"⚡ India VIX: {vix:.1f}{vix_note}\n"
+            f"📊 Prev Close: ₹{prev_close:,.2f} | Open: ₹{today_open:,.2f}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🌅 Morning Session: 09:00 – 17:00 IST (Base & Structure)\n"
-            f"🌙 Evening Session: 17:00 – 23:00 IST (🔥 Primary Trading Window)\n"
+            f"🌅 Morning Session: 09:00 – 17:00 IST (Active Trading)\n"
+            f"🌙 Evening Session: 17:00 – 23:00 IST (Peak Commodity Liquidity)\n"
             f"🛑 EOD Cutoff: 23:15 IST | Close: 23:30 IST\n"
-            f"📌 Strategy Note: High-probability setups & volume trigger mostly in the Evening Session in {mode} mode."
+            f"📌 Strategy Note: Full-day trading active in {mode} mode across Morning & Evening sessions."
         )
         await self.bus.publish(Topic.ALERT,
             {"type": "morning_brief", "text": brief}, self.NAME)
         self._brief_published_date = self._today
 
         if LLM_ENABLED and is_open:
-            asyncio.create_task(self._morning_llm(bias, vix, gap_pct))
+            vol_label = f"ATR {float(msg.payload.get('atr', 0)):.1f}" if msg.payload.get("atr") else "Normal Volatility"
+            asyncio.create_task(self._morning_llm(bias, vol_label, gap_pct, symbol))
 
-    async def _morning_llm(self, bias: str, vix: float, gap_pct: float) -> None:
-        safe_vix = float(vix or 0.0)
-        if not (8.0 <= safe_vix <= 80.0):
-            safe_vix = 14.0
+    async def _morning_llm(self, bias: str, vol_info: str, gap_pct: float, symbol: str) -> None:
         text = await call_llm_async(
-            build_morning_outlook_prompt(bias, safe_vix, gap_pct),
+            build_morning_outlook_prompt(bias, vol_info, gap_pct, symbol=symbol),
             task_type=TaskType.MORNING_OUTLOOK,
             max_tokens=160,
         )
         text = normalize_llm_sentences(text, expected_sentences=3)
-        text = self._sanitize_morning_llm_text(text, safe_vix)
+        text = self._sanitize_morning_llm_text(text, symbol)
         if text:
             await self.bus.publish(Topic.ALERT,
                 {"type": "morning_llm_outlook", "text": text}, self.NAME)
 
     @staticmethod
-    def _sanitize_morning_llm_text(text: str, safe_vix: float) -> str:
+    def _sanitize_morning_llm_text(text: str, symbol: str = "SILVERM") -> str:
         cleaned = str(text or "")
         if not cleaned:
             return cleaned
-        safe_label = f"VIX {safe_vix:.1f}"
-        patterns = [
-            r"\bA\s+VIX\s+(?:reading\s+)?(?:of\s+)?0(?:\.0+)?\b",
-            r"\bVIX\s+(?:reading\s+)?(?:of\s+)?0(?:\.0+)?\b",
-            r"\bIndia\s+VIX\s+(?:reading\s+)?(?:of\s+)?0(?:\.0+)?\b",
-            r"\bIndia\s+VIX\s+(?:stands\s+at\s+|is\s+)?0(?:\.0+)?\b",
-        ]
-        for pattern in patterns:
-            cleaned = re.sub(pattern, safe_label, cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(
-            rf"\bVIX\s+{safe_vix:.1f}\s+indicate\b",
-            f"VIX {safe_vix:.1f} indicates",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
+        # Strip any legacy equity/VIX hallucinations from LLM response
+        cleaned = re.sub(r"\bIndia\s+VIX\b", "Commodity Volatility", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bVIX\b", "Volatility", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bNIFTY\b", symbol, cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bBANKNIFTY\b", symbol, cleaned, flags=re.IGNORECASE)
         return cleaned
 
     #  Signal tracking 
@@ -380,7 +366,13 @@ class AnalyticsAgent:
         entry = self._base_entry(msg.payload, status="RAW")
         try:
             from utils.option_chain_snapshot import OptionChainSnapshot
-            spot = float(msg.payload.get("nifty_ltp", 0) or 0)
+            spot = float(
+                msg.payload.get("price")
+                or msg.payload.get("ltp")
+                or msg.payload.get("spot_price")
+                or msg.payload.get("nifty_ltp")
+                or 0
+            )
             if spot > 0:
                 chain = OptionChainSnapshot()
                 snapshot = await chain.capture(
@@ -400,6 +392,9 @@ class AnalyticsAgent:
         self._upsert_entry(entry)
 
     async def _on_rejected(self, msg: Message) -> None:
+        votes = int(msg.payload.get("votes") or 0)
+        if votes < 4:
+            return
         entry = self._base_entry(msg.payload, status="REJECTED")
         self._merge_signal_fields(entry, msg.payload)
         entry["rejection_reason"] = msg.payload.get("rejection_reason", "")
@@ -850,7 +845,7 @@ class AnalyticsAgent:
             "date": date_str,
             "time": ts.strftime("%H:%M"),
             "entry_time": payload.get("timestamp", ""),
-            "symbol": payload.get("symbol", "NIFTY"),
+            "symbol": payload.get("symbol") or os.getenv("INSTRUMENT", "SILVERM"),
             "direction": payload.get("direction", ""),
             "mode": self._mode_value(payload),
             "regime": payload.get("regime", ""),
@@ -886,6 +881,13 @@ class AnalyticsAgent:
             "regime": signal.get("regime", entry["regime"]),
             "ml_rank_score": round(float(signal.get("ml_rank_score", entry["ml_rank_score"]) or 0), 4),
             "ml_rank_tier": str(signal.get("ml_rank_tier", entry["ml_rank_tier"]) or entry["ml_rank_tier"]),
+            "option_symbol": signal.get("option_symbol") or signal.get("contract_symbol") or entry.get("option_symbol", ""),
+            "est_premium": signal.get("est_premium") or entry.get("est_premium", ""),
+            "entry_premium": signal.get("entry_premium") or signal.get("actual_premium") or entry.get("entry_premium", ""),
+            "actual_premium": signal.get("actual_premium") or signal.get("entry_premium") or entry.get("actual_premium", ""),
+            "sl_premium": signal.get("sl_premium") or entry.get("sl_premium", ""),
+            "target_premium": signal.get("target_premium") or entry.get("target_premium", ""),
+            "premium_source": signal.get("premium_source") or entry.get("premium_source", ""),
             "ml_decision_reason": str(
                 signal.get("ml_decision_reason", entry["ml_decision_reason"])
                 or entry["ml_decision_reason"]
@@ -1038,7 +1040,7 @@ class AnalyticsAgent:
             "date": "",
             "time": "",
             "entry_time": "",
-            "symbol": "NIFTY",
+            "symbol": os.getenv("INSTRUMENT", "SILVERM"),
             "direction": "",
             "nifty_price": 0,
             "strategies_fired": "",

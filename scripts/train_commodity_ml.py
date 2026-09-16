@@ -28,8 +28,10 @@ from config.settings import ML_MODELS_DIR
 
 
 def load_commodity_candles() -> pd.DataFrame:
-    """Load primary 5m candles for SILVERMIC / SILVERM."""
-    csv_path = REPO_ROOT / "data" / "historical" / "SILVERMIC_dhan_5m.csv"
+    """Load primary 5m candles for SILVERM."""
+    csv_path = REPO_ROOT / "data" / "historical" / "SILVERM_dhan_5m.csv"
+    if not csv_path.exists():
+        csv_path = REPO_ROOT / "data" / "historical" / "SILVERMIC_dhan_5m.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"Missing historical candles at {csv_path}")
 
@@ -172,16 +174,17 @@ def train_commodity_model():
     # Ensure output directory exists
     models_dir = Path(ML_MODELS_DIR)
     models_dir.mkdir(parents=True, exist_ok=True)
-    target_path = models_dir / "silvermic_5minute.pkl"
+    target_path = models_dir / "silverm_5minute.pkl"
 
     # Save ensemble
     trainer.ensemble.save(target_path)
     logger.success(f"✅ Production Commodity ML Model successfully saved to {target_path}")
 
-    # Also save fallback alias commodity_5minute.pkl
-    alias_path = models_dir / "commodity_5minute.pkl"
-    trainer.ensemble.save(alias_path)
-    logger.success(f"✅ Commodity fallback alias saved to {alias_path}")
+    # Also save compatibility aliases: silvermic_5minute.pkl and commodity_5minute.pkl
+    for alias_name in ("silvermic_5minute.pkl", "commodity_5minute.pkl"):
+        alias_path = models_dir / alias_name
+        trainer.ensemble.save(alias_path)
+        logger.info(f"✅ Commodity compatibility alias saved to {alias_path}")
 
     return target_path, meta
 

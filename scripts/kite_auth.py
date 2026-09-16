@@ -40,7 +40,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 print()
 print("╔══════════════════════════════════════════════╗")
-print(f"║   SignalForge — Daily Auth ({BROKER.upper():^8})         ║")
+print(f"║   MCXForge — Daily Auth ({BROKER.upper():^8})            ║")
 print(f"║   {datetime.now(IST).strftime('%Y-%m-%d  %H:%M IST')}                      ║")
 print("╚══════════════════════════════════════════════╝")
 print()

@@ -153,8 +153,9 @@ def get_oi_buildup(
         expiry_date = (d + timedelta(days=days)).isoformat()
         expiry = ddate.fromisoformat(expiry_date)
 
-    atm  = int(round(spot / 50) * 50)
-    step = 50
+    sym = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    step = 500 if "SILVER" in sym else (100 if "GOLD" in sym else 50)
+    atm  = int(round(spot / step) * step)
     n    = strikes_range // step
 
     ce_oi: dict[int, float] = {}
@@ -164,8 +165,8 @@ def get_oi_buildup(
     for i in range(-n, n+1):
         k = atm + i * step
         try:
-            ce_sym = build_option_symbol("NIFTY", expiry, k, "CE")
-            pe_sym = build_option_symbol("NIFTY", expiry, k, "PE")
+            ce_sym = build_option_symbol(sym, expiry, k, "CE")
+            pe_sym = build_option_symbol(sym, expiry, k, "PE")
             ce_ltp = broker.get_option_ltp(ce_sym)
             pe_ltp = broker.get_option_ltp(pe_sym)
             # Use LTP as OI proxy (real OI needs broker API extension)
@@ -241,7 +242,9 @@ def get_iv_term_structure(
     days2 = days1 + 7
     exp1  = d + timedelta(days=days1)
     exp2  = d + timedelta(days=days2)
-    atm   = int(round(spot / 50) * 50)
+    sym   = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+    step  = 500 if "SILVER" in sym else (100 if "GOLD" in sym else 50)
+    atm   = int(round(spot / step) * step)
 
     near_iv = hv_proxy
     far_iv  = hv_proxy
@@ -250,8 +253,8 @@ def get_iv_term_structure(
         T1 = max(days1, 1) / 365.0
         T2 = max(days2, 1) / 365.0
 
-        ce1_sym = build_option_symbol("NIFTY", exp1, atm, "CE")
-        ce2_sym = build_option_symbol("NIFTY", exp2, atm, "CE")
+        ce1_sym = build_option_symbol(sym, exp1, atm, "CE")
+        ce2_sym = build_option_symbol(sym, exp2, atm, "CE")
 
         ltp1 = broker.get_option_ltp(ce1_sym)
         ltp2 = broker.get_option_ltp(ce2_sym)

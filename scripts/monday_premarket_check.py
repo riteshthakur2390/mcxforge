@@ -60,7 +60,7 @@ def run_monday_check():
     try:
         from instruments.registry import get_instrument_config, resolve_active_contract
         cfg = get_instrument_config("SILVERM")
-        strike_step = getattr(cfg, "strike_step", 500)
+        strike_step = getattr(cfg, "strike_step", 1000)
         print(f"  ✅ Instrument: {cfg.symbol} | Lot Size: {cfg.lot_size} kg | Strike Step: {strike_step} pts | Tick: ₹{cfg.tick_size}")
         contract = resolve_active_contract("SILVERM")
         sym = getattr(contract, "trading_symbol", getattr(contract, "contract_symbol", "SILVERM"))
@@ -69,15 +69,17 @@ def run_monday_check():
         print(f"  ❌ Failed instrument resolution: {e}")
         all_passed = False
 
-    # ── CHECK 4: TRAINED ML MODEL & ML CONFIDENCE >= 0.28 GATEKEEPER ────────
-    print("\n4. MACHINE LEARNING ENSEMBLE & ML CONF >= 0.28 GATEKEEPER:")
+    # ── CHECK 4: TRAINED ML MODEL & ML CONFIDENCE >= 0.32 GATEKEEPER ────────
+    print("\n4. MACHINE LEARNING ENSEMBLE & ML CONF >= 0.32 GATEKEEPER:")
     try:
         from ml.model import SignalForgeEnsemble
         from config.settings import ML_MIN_CONFIDENCE, ML_THRESHOLD_OVERRIDE
         from scripts.live_commodity_paper_runner import LiveCommodityPaperRunner
 
         ensemble = SignalForgeEnsemble()
-        model_path = Path("ml/saved_models/silvermic_5minute.pkl")
+        model_path = Path("ml/saved_models/silverm_5minute.pkl")
+        if not model_path.exists():
+            model_path = Path("ml/saved_models/silvermic_5minute.pkl")
         loaded = ensemble.load(model_path)
         if loaded:
             meta = ensemble.meta
@@ -86,14 +88,14 @@ def run_monday_check():
             print(f"  ✅ Features:        {len(meta.feature_cols)} technical & microstructure indicators")
             print(f"  ✅ Trained At:       {meta.trained_at[:19]} | Training Samples: {meta.n_samples}")
             print(f"  ✅ Train AUC:       {meta.train_auc:.4f} | Validation AUC: {meta.val_auc:.4f}")
-            print(f"  ✅ ML Min Conf:     {ML_MIN_CONFIDENCE:.2f} (Strict Gate: Trades ONLY when ML Conf >= 0.28)")
+            print(f"  ✅ ML Min Conf:     {ML_MIN_CONFIDENCE:.2f} (Strict Gate: Trades ONLY when ML Conf >= 0.32)")
             print(f"  ✅ ML Thr Override: {ML_THRESHOLD_OVERRIDE:.2f}")
 
             # Verify runner default
             dummy_runner = LiveCommodityPaperRunner.__new__(LiveCommodityPaperRunner)
-            dummy_runner.min_ml_conf = 0.28
-            assert ML_MIN_CONFIDENCE >= 0.28, f"ML_MIN_CONFIDENCE {ML_MIN_CONFIDENCE} < 0.28"
-            assert ML_THRESHOLD_OVERRIDE >= 0.28, f"ML_THRESHOLD_OVERRIDE {ML_THRESHOLD_OVERRIDE} < 0.28"
+            dummy_runner.min_ml_conf = 0.32
+            assert ML_MIN_CONFIDENCE >= 0.32, f"ML_MIN_CONFIDENCE {ML_MIN_CONFIDENCE} < 0.32"
+            assert ML_THRESHOLD_OVERRIDE >= 0.32, f"ML_THRESHOLD_OVERRIDE {ML_THRESHOLD_OVERRIDE} < 0.32"
         else:
             print(f"  ❌ Failed to load ML model from {model_path}")
             all_passed = False
@@ -101,7 +103,7 @@ def run_monday_check():
         print(f"  ❌ ML Error: {e}")
         all_passed = False
 
-    # ── CHECK 5: STRATEGY CATALOG INTEGRITY (43 ACTIVE STRATEGIES) ───────────
+    # ── CHECK 5: STRATEGY CATALOG INTEGRITY (37 ACTIVE STRATEGIES) ───────────
     print("\n5. STRATEGY CATALOG INTEGRITY:")
     try:
         from agents_code.agent8_dashboard.app import DashboardAlertAgent
@@ -110,10 +112,10 @@ def run_monday_check():
         da.analytics_agent = None
         active_strats = da._strategy_status()
         strat_names = [s["name"] for s in active_strats]
-        print(f"  ✅ Active Strategy Count: {len(active_strats)} / 43")
-        assert len(active_strats) == 43, f"Expected 43 strategies, got {len(active_strats)}"
-        print(f"  ✅ Newly Added Models:    GammaExposure={any('GammaExposure' in s for s in strat_names)} | IVContraction={any('IVContraction' in s for s in strat_names)} | ExpiryWeek={any('ExpiryWeek' in s for s in strat_names)}")
-        print(f"  ✅ Pruned/Toxic Models:   Ichimoku={any('Ichimoku' in s for s in strat_names)} | SqueezeMomentum={any('SqueezeMomentum' in s for s in strat_names)} | Pairs={any('Pairs' in s for s in strat_names)}")
+        print(f"  ✅ Active Strategy Count: {len(active_strats)} / 37")
+        assert len(active_strats) == 37, f"Expected 37 strategies, got {len(active_strats)}"
+        print(f"  ✅ Catalog Models Active: SuperTrend+RSI={'SuperTrend+RSI' in strat_names} | TermStructure={'TermStructure' in strat_names} | OIAnalysis={'OIAnalysis' in strat_names}")
+        print(f"  ✅ Risk Models Active:    ADX+PSAR={'ADX+PSAR' in strat_names} | SqueezeMomentum={'SqueezeMomentum' in strat_names} | GoldSilverPairs={'GoldSilverPairs' in strat_names}")
     except Exception as e:
         print(f"  ❌ Strategy Error: {e}")
         all_passed = False
@@ -151,23 +153,23 @@ def run_monday_check():
         print(f"  ❌ UI Error: {e}")
         all_passed = False
 
-    # ── CHECK 8: SIGNALFORGE FEATURE PARITY & RISK SAFEGUARDS ────────────────
-    print("\n8. SIGNALFORGE FEATURE PARITY & RISK CONTROLS:")
+    # ── CHECK 8: MCXFORGE RISK SAFEGUARDS & EXECUTION CONTROLS ────────────────
+    print("\n8. MCXFORGE RISK SAFEGUARDS & EXECUTION CONTROLS:")
     try:
         total_fund = float(os.getenv("TOTAL_FUND", "200000"))
-        max_cap_trade = float(os.getenv("MAX_CAPITAL_PER_TRADE", "30000"))
-        max_cap_pct = float(os.getenv("MAX_CAP_PCT", "15.0"))
+        max_cap_trade = float(os.getenv("MAX_CAPITAL_PER_TRADE", "40000"))
+        max_cap_pct = float(os.getenv("MAX_CAP_PCT", "20.0"))
         eod_time = os.getenv("EOD_SQUARE_OFF_TIME", "23:15")
         tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
         tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
 
-        print(f"  ✅ Capital & Risk Budget:  Total ₹{total_fund:,.0f} | Trade Cap ₹{max_cap_trade:,.0f} ({max_cap_pct:.1f}%) [Strict SignalForge Parity]")
+        print(f"  ✅ Capital & Risk Budget:  Total ₹{total_fund:,.0f} | Trade Cap ₹{max_cap_trade:,.0f} ({max_cap_pct:.1f}%) [Strict Risk Controls]")
         print(f"  ✅ Intraday Execution:     Dynamic Trailing SL + Profit Targets Active")
         print(f"  ✅ EOD Auto-Squareoff:     Strict {eod_time} IST Cutoff (Prior to MCX 23:30 Close)")
         print(f"  ✅ Telegram Alerts:        Bot Token Configured ({tg_token[:10]}...) | Chat ID: {tg_chat}")
         print(f"  ✅ Broker Order Guard:     Live Broker Orders BLOCKED (Simulated Paper Execution Only)")
-        assert max_cap_trade <= 30000.0, f"Trade capital {max_cap_trade} exceeds ₹30,000 cap"
-        assert max_cap_pct <= 15.0, f"Max capital pct {max_cap_pct} exceeds 15%"
+        assert max_cap_trade <= 40000.0, f"Trade capital {max_cap_trade} exceeds ₹40,000 cap"
+        assert max_cap_pct <= 20.0, f"Max capital pct {max_cap_pct} exceeds 20%"
     except Exception as e:
         print(f"  ❌ Feature Parity Error: {e}")
         all_passed = False

@@ -39,7 +39,7 @@ def test_ml_filter_ranks_signal_without_rejecting():
         payload = {
             "direction": "BUY_CALL",
             "confidence": 0.84,
-            "votes": 4,
+            "votes": 5,
             "timestamp": "2026-04-09T10:15:00+05:30",
             "strategies_fired": ["ADX+PSAR", "Ichimoku", "SuperTrend", "VWAP+EMA"],
             "metadata": {
@@ -127,7 +127,7 @@ def test_ml_filter_rejects_fallback_when_model_is_trained():
         payload = {
             "direction": "BUY_PUT",
             "confidence": 0.84,
-            "votes": 4,
+            "votes": 5,
             "timestamp": "2026-04-09T10:15:00+05:30",
             "strategies_fired": ["ADX+PSAR", "BBSqueeze", "SuperTrend", "VWAP+EMA"],
             "metadata": {

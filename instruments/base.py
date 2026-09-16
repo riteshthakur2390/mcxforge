@@ -47,8 +47,8 @@ class MarginSpec:
 @dataclass(frozen=True)
 class ContractSpec:
     """Active futures contract specifications."""
-    symbol: str                        # e.g., "SILVERMIC"
-    trading_symbol: str                # e.g., "SILVERMIC-30Nov2026-FUT"
+    symbol: str                        # e.g., "SILVERM"
+    trading_symbol: str                # e.g., "SILVERM-30Nov2026-FUT"
     expiry_date: date
     lot_size: int
     tick_size: float
@@ -59,17 +59,18 @@ class ContractSpec:
 class InstrumentConfig:
     """
     Complete configuration for an MCX Commodity Futures instrument.
-    Generic across SILVERMIC, GOLD, CRUDEOIL, NATURALGAS, etc.
+    Generic across SILVERM, GOLD, CRUDEOIL, NATURALGAS, etc.
     """
-    symbol: str                        # Root symbol: e.g. "SILVERMIC"
-    name: str                          # Human readable: e.g. "Silver Micro Futures"
+    symbol: str                        # Root symbol: e.g. "SILVERM"
+    name: str                          # Human readable: e.g. "Silver Mini Futures"
     exchange: str = "MCX"
     segment: str = "MCX_COMM"
     sector: CommoditySector = CommoditySector.PRECIOUS_METALS
-    lot_size: int = 1                  # 1 kg for SILVERMIC
+    lot_size: int = 5                  # 5 kg for SILVERM
+    strike_step: int = 1000            # Strike interval for options (1000 for Silver / SILVERM)
     tick_size: float = 1.0             # ₹1.0
-    tick_value: float = 1.0            # ₹1.0 per point per lot
-    contract_unit: str = "1 kg"
+    tick_value: float = 5.0            # ₹5.0 per point per lot (5 kg × ₹1.0)
+    contract_unit: str = "5 kg"
     quotation_unit: str = "1 kg"
     currency: str = "INR"
     session: SessionSpec = field(default_factory=SessionSpec)

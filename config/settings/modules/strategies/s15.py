@@ -3,7 +3,7 @@ from config.settings.utils import *
 
 S15_ACC_CANDLES = int(os.getenv("S15_ACC_CANDLES", "15"))
 S15_ACC_CANDLES_MIN = int(os.getenv("S15_ACC_CANDLES_MIN", "10"))
-S15_ACC_RANGE_PCT = float(os.getenv("S15_ACC_RANGE_PCT", "0.30"))
+S15_ACC_RANGE_PCT = float(os.getenv("S15_ACC_RANGE_PCT", "0.60"))
 S15_ATR_CONTRACTION = float(os.getenv("S15_ATR_CONTRACTION", "0.80"))
 S15_MANIP_LOOKBACK = int(os.getenv("S15_MANIP_LOOKBACK", "8"))
 S15_WICK_MIN_PCT = float(os.getenv("S15_WICK_MIN_PCT", "0.15"))

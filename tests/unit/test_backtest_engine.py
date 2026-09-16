@@ -218,7 +218,7 @@ def test_ml_filter_allows_low_consensus_early_trigger(monkeypatch):
 def test_ml_fallback_blocks_weak_breakout():
     allowed, reason = MLFilterAgent._passes_fallback_gate(
         {
-            "votes": 4,
+            "votes": 5,
             "regime": "TRENDING",
             "metadata": {
                 "_context": {
@@ -239,7 +239,7 @@ def test_ml_fallback_blocks_weak_breakout():
 def test_ml_fallback_blocks_weak_high_consensus_trend_pullback():
     allowed, reason = MLFilterAgent._passes_fallback_gate(
         {
-            "votes": 4,
+            "votes": 5,
             "regime": "TRENDING",
             "metadata": {
                 "_context": {
@@ -260,7 +260,7 @@ def test_ml_fallback_blocks_weak_high_consensus_trend_pullback():
 def test_ml_fallback_allows_stronger_trend_pullback():
     allowed, reason = MLFilterAgent._passes_fallback_gate(
         {
-            "votes": 4,
+            "votes": 5,
             "regime": "TRENDING",
             "metadata": {
                 "_context": {

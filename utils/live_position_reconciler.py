@@ -55,12 +55,12 @@ class LivePositionReconciler:
 
     @staticmethod
     def _is_market_active() -> bool:
-        """Check if Indian market is open (09:15 - 15:35 IST, Mon-Fri)."""
+        """Check if MCX market is open (09:00 - 23:30 IST, Mon-Fri)."""
         now = datetime.now(IST)
         if now.weekday() >= 5:  # Saturday or Sunday
             return False
-        market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
-        market_end = now.replace(hour=15, minute=35, second=0, microsecond=0)
+        market_start = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        market_end = now.replace(hour=23, minute=30, second=0, microsecond=0)
         return market_start <= now <= market_end
 
     async def start(self) -> None:
@@ -179,7 +179,7 @@ class LivePositionReconciler:
             await self._alert(result)
         else:
             self._missing_broker_count = 0
-            logger.info(
+            logger.debug(
                 f"[{self.NAME}] Position reconcile OK: {result.issue} | "
                 f"internal={internal_symbol}(qty={internal_qty}) broker_positions={len(broker_positions)}"
             )
@@ -208,11 +208,13 @@ class LivePositionReconciler:
                         continue
                     sym = str(getattr(pos, "symbol", "") or "").strip()
                     sym_upper = sym.upper()
-                    # Filter for SignalForge NIFTY positions only (ignore SENSEX, BANKNIFTY, equity holdings)
-                    if not (sym_upper.startswith("NIFTY") or "NIFTY" in sym_upper):
+                    # Filter for MCX commodity positions
+                    valid_commodities = ("SILVER", "GOLD", "CRUDE", "NATURALGAS", "NATGAS")
+                    active_sym = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
+                    if not (any(c in sym_upper for c in valid_commodities) or active_sym in sym_upper):
                         continue
                     norm_pos_sym = self._normalize_sym(sym)
-                    # Ignore manual/external trades not initiated by SignalForge
+                    # Ignore manual/external trades not initiated by MCXForge
                     if not (is_bot_symbol(sym_upper, today_str) or (norm_internal and norm_pos_sym == norm_internal)):
                         continue
                     rows.append({

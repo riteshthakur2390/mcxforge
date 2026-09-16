@@ -214,12 +214,12 @@ class PositionRoller:
         new_delta     = self._estimate_delta(spot, strike, new_dte, opt_type)
         max_new_loss  = -(entry_prem + max(net_debit, 0)) / entry_prem * 100
 
-        # Build new symbol (simplified — planner will finalize)
+        sym = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
         from utils.option_utils import build_option_symbol
         try:
-            new_symbol = build_option_symbol("NIFTY", new_expiry, strike, opt_type)
+            new_symbol = build_option_symbol(sym, new_expiry, strike, opt_type)
         except Exception:
-            new_symbol = f"NIFTY_{new_exp_str}_{strike}{opt_type}"
+            new_symbol = f"{sym}_{new_exp_str}_{strike}{opt_type}"
 
         viable = (
             new_delta >= MIN_NEW_DELTA and
@@ -265,11 +265,12 @@ class PositionRoller:
         roll_cost_pct = abs(net_debit) / entry_prem * 100
         max_new_loss  = -(entry_prem + max(net_debit, 0)) / entry_prem * 100
 
+        sym = str(os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM"))).upper()
         from utils.option_utils import build_option_symbol
         try:
-            new_symbol = build_option_symbol("NIFTY", expiry, new_strike, opt_type)
+            new_symbol = build_option_symbol(sym, expiry, new_strike, opt_type)
         except Exception:
-            new_symbol = f"NIFTY_{expiry_str}_{new_strike}{opt_type}"
+            new_symbol = f"{sym}_{expiry_str}_{new_strike}{opt_type}"
 
         viable = (
             new_strike != strike and

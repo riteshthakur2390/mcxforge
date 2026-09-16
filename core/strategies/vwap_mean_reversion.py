@@ -89,7 +89,8 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
         max_h = h.rolling(n, min_periods=1).max()
         min_l = l.rolling(n, min_periods=1).min()
         range_hl = (max_h - min_l).replace(0, 1e-6)
-        data["choppiness"] = 100.0 * np.log10(sum_tr / range_hl) / np.log10(n)
+        chop_ratio = (sum_tr / range_hl).clip(lower=1e-6)
+        data["choppiness"] = 100.0 * np.log10(chop_ratio) / np.log10(n)
 
         # RSI
         delta = c.diff()
@@ -103,6 +104,15 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
         data["vwap_pct"] = (c - data["vwap"]) / data["vwap"].replace(0, 1e-6)
         vol_p = int(self.parameters.get("volume_sma_period", 20))
         data["volume_sma"] = v.rolling(vol_p, min_periods=1).mean()
+
+        # Standard deviation bands from VWAP (merged from VWAPExtreme)
+        deviations = (c - data["vwap"]) ** 2
+        sd = np.sqrt(deviations.rolling(20, min_periods=5).mean()).replace(0, 1e-6)
+        data["vwap_sd"] = sd
+        data["vwap_sd2_upper"] = data["vwap"] + 2.0 * sd
+        data["vwap_sd2_lower"] = data["vwap"] - 2.0 * sd
+        data["vwap_sd3_upper"] = data["vwap"] + 3.0 * sd
+        data["vwap_sd3_lower"] = data["vwap"] - 3.0 * sd
 
         return data
 
@@ -142,8 +152,12 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
 
         # REGIME FILTER: Strictly reject if market is trending
         if regime_details:
-            if regime_details.regime in (MarketRegime.TREND, MarketRegime.BREAKOUT, MarketRegime.ABNORMAL):
-                empty_signal.rejection_reason = f"REGIME_TRENDING_VETO (Regime {regime_details.regime.value} hostile to mean reversion)"
+            r_obj = getattr(regime_details, "regime", None) or (
+                regime_details.get("regime") if isinstance(regime_details, dict) else None
+            )
+            r_val = r_obj.value if hasattr(r_obj, "value") else str(r_obj)
+            if r_obj in (MarketRegime.TREND, MarketRegime.BREAKOUT, MarketRegime.ABNORMAL) or r_val in ("TREND", "BREAKOUT", "ABNORMAL", "TRENDING"):
+                empty_signal.rejection_reason = f"REGIME_TRENDING_VETO (Regime {r_val} hostile to mean reversion)"
                 empty_signal.decision = "NO_TRADE"
                 return empty_signal
 
@@ -183,17 +197,30 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
         vwap_pct = float(curr["vwap_pct"])
         vol_ok = (not use_vol) or (vol >= vol_sma * 0.9)
 
-        # Long Mean Reversion: Price deeply stretched below VWAP + oversold RSI hook
-        is_long_dist = (vwap_dist_atr <= -req_dist) or (vwap_pct <= -req_pct)
-        if is_long_dist and rsi <= self.parameters["rsi_oversold"] and vol_ok:
-            # Confirm price rejection / hook (close > low + 0.2 * range)
+        o = float(curr["open"]) if "open" in curr else close
+        h = float(curr["high"])
+        l = float(curr["low"])
+        c_range = max(h - l, 0.01)
+        upper_reject = ((h - max(o, close)) / c_range >= 0.30) and (close < o)
+        lower_reject = ((min(o, close) - l) / c_range >= 0.30) and (close > o)
+        at_lower2 = close <= float(curr.get("vwap_sd2_lower", 0.0))
+        at_upper2 = close >= float(curr.get("vwap_sd2_upper", 1e9))
+
+        # Long Mean Reversion: Price deeply stretched below VWAP OR at 2nd SD with lower wick rejection
+        is_long_dist = (vwap_dist_atr <= -req_dist) or (vwap_pct <= -req_pct) or (at_lower2 and lower_reject)
+        if is_long_dist and (rsi <= self.parameters["rsi_oversold"] or lower_reject) and vol_ok:
+            # Confirm price rejection / hook (close > low + 0.2 * range) or lower wick rejection
             bar_range = float(curr["high"]) - float(curr["low"])
-            if bar_range > 0 and (close - float(curr["low"])) / bar_range >= 0.20:
+            if (bar_range > 0 and (close - float(curr["low"])) / bar_range >= 0.20) or lower_reject:
                 entry_price = self.round_to_tick(close)
                 sl = self.calculate_stop_loss(entry_price, Direction.BUY, atr, data)
                 target = self.calculate_target(entry_price, sl, Direction.BUY)
                 rr = round(abs(target - entry_price) / max(abs(entry_price - sl), 1e-6), 2)
-                conf = min(0.90, round(0.60 + min(abs(vwap_dist_atr) * 0.1, 0.25), 2))
+                sd_bonus = 0.08 if at_lower2 and lower_reject else 0.0
+                conf = min(0.92, round(0.60 + min(abs(vwap_dist_atr) * 0.1, 0.25) + sd_bonus, 2))
+                reason_str = f"Oversold VWAP extension ({vwap_dist_atr:.2f} ATRs below VWAP {vwap:.1f}, RSI {rsi:.1f})"
+                if at_lower2 and lower_reject:
+                    reason_str += " | Confirmed by 2nd SD VWAP Extreme band rejection"
 
                 return StrategySignal(
                     timestamp=now_ts,
@@ -207,23 +234,27 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
                     stop_loss=sl,
                     target=target,
                     risk_reward=rr,
-                    regime=regime_details.regime if regime_details else MarketRegime.RANGE,
-                    reason=f"Oversold VWAP extension ({vwap_dist_atr:.2f} ATRs below VWAP {vwap:.1f}, RSI {rsi:.1f})",
+                    regime=getattr(regime_details, "regime", None) or (regime_details.get("regime") if isinstance(regime_details, dict) else MarketRegime.RANGE),
+                    reason=reason_str,
                     indicators=indicators_snapshot,
                     decision="TRADE",
                     is_valid=True,
                 )
 
-        # Short Mean Reversion: Price deeply stretched above VWAP + overbought RSI hook
-        is_short_dist = (vwap_dist_atr >= req_dist) or (vwap_pct >= req_pct)
-        if is_short_dist and rsi >= self.parameters["rsi_overbought"] and vol_ok:
+        # Short Mean Reversion: Price deeply stretched above VWAP OR at 2nd SD with upper wick rejection
+        is_short_dist = (vwap_dist_atr >= req_dist) or (vwap_pct >= req_pct) or (at_upper2 and upper_reject)
+        if is_short_dist and (rsi >= self.parameters["rsi_overbought"] or upper_reject) and vol_ok:
             bar_range = float(curr["high"]) - float(curr["low"])
-            if bar_range > 0 and (float(curr["high"]) - close) / bar_range >= 0.20:
+            if (bar_range > 0 and (float(curr["high"]) - close) / bar_range >= 0.20) or upper_reject:
                 entry_price = self.round_to_tick(close)
                 sl = self.calculate_stop_loss(entry_price, Direction.SELL, atr, data)
                 target = self.calculate_target(entry_price, sl, Direction.SELL)
                 rr = round(abs(entry_price - target) / max(abs(sl - entry_price), 1e-6), 2)
-                conf = min(0.90, round(0.60 + min(abs(vwap_dist_atr) * 0.1, 0.25), 2))
+                sd_bonus = 0.08 if at_upper2 and upper_reject else 0.0
+                conf = min(0.92, round(0.60 + min(abs(vwap_dist_atr) * 0.1, 0.25) + sd_bonus, 2))
+                reason_str = f"Overbought VWAP extension ({vwap_dist_atr:.2f} ATRs above VWAP {vwap:.1f}, RSI {rsi:.1f})"
+                if at_upper2 and upper_reject:
+                    reason_str += " | Confirmed by 2nd SD VWAP Extreme band rejection"
 
                 return StrategySignal(
                     timestamp=now_ts,
@@ -237,7 +268,7 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
                     stop_loss=sl,
                     target=target,
                     risk_reward=rr,
-                    regime=regime_details.regime if regime_details else MarketRegime.RANGE,
+                    regime=getattr(regime_details, "regime", None) or (regime_details.get("regime") if isinstance(regime_details, dict) else MarketRegime.RANGE),
                     reason=f"Overbought VWAP extension ({vwap_dist_atr:.2f} ATRs above VWAP {vwap:.1f}, RSI {rsi:.1f})",
                     indicators=indicators_snapshot,
                     decision="TRADE",
@@ -290,7 +321,10 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
             return base_exit
 
         # If market switches to strong TREND, exit immediately (do not hold counter-trend)
-        if regime_details and regime_details.regime == MarketRegime.TREND:
+        r_obj = getattr(regime_details, "regime", None) or (
+            regime_details.get("regime") if isinstance(regime_details, dict) else None
+        )
+        if r_obj == MarketRegime.TREND or getattr(r_obj, "value", str(r_obj)) == "TREND":
             return {
                 "exit": True,
                 "reason": "REGIME_SHIFTED_TO_TREND_COUNTER_EXIT",

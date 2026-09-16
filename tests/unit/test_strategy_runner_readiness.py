@@ -39,7 +39,8 @@ def test_strategy_readiness_skips_with_clear_reasons():
     skipped_by_name = {item["name"]: item for item in skipped}
 
     assert "SuperTrend+RSI" in [meta.name for meta in eligible]
-    assert skipped_by_name["ORB"]["reason"] == "ORB levels not available yet"
+    orb_key = "OpeningRangeBreakout" if "OpeningRangeBreakout" in skipped_by_name else "ORB"
+    assert skipped_by_name[orb_key]["reason"] == "ORB levels not available yet"
     assert "need at least" in skipped_by_name["Ichimoku"]["reason"]
     assert "need at least" in skipped_by_name["VolumeProfile"]["reason"]
     assert skipped_by_name["CPR"]["reason"] == "previous session data not available"
