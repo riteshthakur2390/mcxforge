@@ -108,19 +108,20 @@ class ExecutionAgent:
     async def _dry_run(self, plan: dict) -> None:
         ts = datetime.now(IST).strftime("%H%M%S")
         lot_size = self._resolve_lot_size(plan)
-        # Allow scale-in and contract upgrade orders to reach PositionManager
+        # Allow scale-in and contract upgrade orders to reach PositionManager for the same commodity
         is_scale_in = False
-        if len(self.order_manager._open_positions) == 1:
-            open_sym = list(self.order_manager._open_positions.keys())[0]
-            open_pos_info = self.order_manager._open_positions[open_sym]
-            open_dir = str(open_pos_info.get("direction", "") or "").upper()
-            sig = plan.get("signal") or {}
-            new_dir = str(sig.get("direction", "") if isinstance(sig, dict) else getattr(sig, "direction", "") or "").upper()
-            if ("PUT" in open_dir and "PUT" in new_dir) or ("CALL" in open_dir and "CALL" in new_dir):
-                is_scale_in = True
+        plan_sym = plan.get("symbol") or plan.get("option_symbol") or ""
+        for open_sym, open_pos_info in self.order_manager._open_positions.items():
+            if self.order_manager._canonical_sym(open_sym) == self.order_manager._canonical_sym(plan_sym):
+                open_dir = str(open_pos_info.get("direction", "") or "").upper()
+                sig = plan.get("signal") or {}
+                new_dir = str(sig.get("direction", "") if isinstance(sig, dict) else getattr(sig, "direction", "") or "").upper()
+                if ("PUT" in open_dir and "PUT" in new_dir) or ("CALL" in open_dir and "CALL" in new_dir):
+                    is_scale_in = True
+                break
 
         if not is_scale_in:
-            allowed, guard_reason = self.order_manager.can_open_position()
+            allowed, guard_reason = self.order_manager.can_open_position(symbol=plan_sym)
             if not allowed:
                 await self._skip_due_to_order_guard(plan, guard_reason)
                 return
@@ -201,7 +202,8 @@ class ExecutionAgent:
         lot_size = self._resolve_lot_size(plan)
         quantity = int(plan.get("quantity", lot_size) or lot_size)
         lots = max(1, quantity // max(lot_size, 1))
-        allowed, guard_reason = self.order_manager.can_open_position()
+        plan_sym = plan.get("symbol") or plan.get("option_symbol") or ""
+        allowed, guard_reason = self.order_manager.can_open_position(symbol=plan_sym)
         if not allowed:
             await self._skip_due_to_order_guard(plan, guard_reason)
             return

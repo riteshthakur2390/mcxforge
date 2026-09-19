@@ -5,7 +5,7 @@ agents_code/agent4_planner/planner.py  Trade Planner Agent
 """
 import asyncio
 from loguru import logger
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Union
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -59,6 +59,7 @@ from utils.smart_entry_filter import get_smart_entry_filter
 from backtesting.realistic_assumptions import apply_realistic_entry
 from utils.pipeline_logging import log_pipeline_stage
 from utils.advanced_filters import get_expiry_theta
+from instruments.registry import get_instrument_strategy_config, normalize_symbol
 
 BACKTEST_MAX_TRADE_INVESTMENT_INR = float(os.getenv("BACKTEST_MAX_TRADE_INVESTMENT_INR", "40000"))
 MAX_TRADE_INVESTMENT_INR = BACKTEST_MAX_TRADE_INVESTMENT_INR
@@ -406,6 +407,10 @@ class TradePlannerAgent:
             return (
                 f"blocked timing exhaustion with weak consensus (timing={timing_class}, votes={votes} < 7)"
             )
+        if timing_class == "EXTENDED" and votes < 5:
+            return (
+                f"blocked extended move entry without high consensus (timing={timing_class}, votes={votes} < 5)"
+            )
 
         # ── Anti-Chasing & Mean-Extension Guard ──────────────────────────────
         setup_ctx = setup.get("context", {}) or {}
@@ -416,7 +421,7 @@ class TradePlannerAgent:
             # If price is already extended >0.35% from VWAP without compression/pullback
             if (
                 stretch_pct >= 0.35
-                and setup_type in {"breakout", "vote_aligned"}
+                and setup_type in {"breakout", "vote_aligned", "trend_pullback", "none"}
                 and not (cas_override or (hero_zero_active and expiry_session))
                 and not {"ORB", "CPR", "FVG"}.intersection(strategies)
             ):
@@ -1347,6 +1352,11 @@ class TradePlannerAgent:
             return True, ""
         if not is_expiry_day(signal_ts, symbol=symbol):
             return False, f"{symbol} DTE=0 but signal day is not weekly expiry"
+        from config.settings.modules.session_policy import is_expiry_option_freeze
+        is_frozen, freeze_reason = is_expiry_option_freeze(signal_ts, signal_ts.date())
+        if is_frozen:
+            return False, freeze_reason
+
         setup_type = str(setup.get("setup_type", "unknown") or "unknown").lower()
         setup_strength = float(setup.get("setup_strength", 0.0) or 0.0)
         mins = signal_ts.hour * 60 + signal_ts.minute
@@ -2508,6 +2518,17 @@ class TradePlannerAgent:
                     if compressed_target_reason
                     else "late_session"
                 )
+            max_intraday_cap = float(os.getenv("MAX_INTRADAY_TARGET_PCT", "22.0"))
+            if max_intraday_cap > 0:
+                compressed_target_pct = (
+                    min(compressed_target_pct, max_intraday_cap)
+                    if compressed_target_pct is not None
+                    else max_intraday_cap
+                )
+                if not compressed_target_reason:
+                    compressed_target_reason = "max_intraday_cap"
+                elif "max_intraday_cap" not in compressed_target_reason:
+                    compressed_target_reason += "+max_intraday_cap"
             if compressed_target_pct is not None and current_target_pct > compressed_target_pct:
                 compressed_target = self._compress_target(
                     entry_premium=est_premium,
@@ -2835,6 +2856,19 @@ class TradePlannerAgent:
                 notes.append(f"Skipped {snap.strike}{option_type}: {quality_block}")
                 continue
 
+            # Natural Gas (NATGASM) Liquidity & Spread Gate (pre-17:00 IST NYMEX session)
+            bid = float(getattr(snap, "bid_price", getattr(snap, "bid", 0.0)) or 0.0)
+            ask = float(getattr(snap, "ask_price", getattr(snap, "ask", 0.0)) or 0.0)
+            if symbol.upper() in ("NATGASM", "NATGAS", "NATURALGAS") and bid > 0 and ask > 0:
+                mid = (bid + ask) / 2.0
+                spread_pct = (ask - bid) / mid if mid > 0 else 0.0
+                if signal_ts.hour < 17 and spread_pct > 0.04:
+                    notes.append(
+                        f"Skipped {snap.strike}{option_type}: NATGASM spread gate "
+                        f"(bid={bid:.1f}, ask={ask:.1f}, spread={spread_pct:.1%} > 4.0% before 17:00 IST)"
+                    )
+                    continue
+
             gf = GreeksFilter()
             allow_expiry_day = (dte <= 1) or is_expiry_day(
                 self._resolve_signal_ts(signal_data.get("timestamp")),
@@ -2862,6 +2896,7 @@ class TradePlannerAgent:
                 market_context=market_context,
                 is_hero_zero=hero_zero_active,
                 is_expiry_day=allow_expiry_day,
+                symbol=symbol,
             )
             decision = self.final_decision.evaluate(
                 entry_premium=premium,
@@ -3253,14 +3288,28 @@ class TradePlannerAgent:
         risk_per_lot: float,
     ) -> tuple[float, str]:
         sym = getattr(snap, "symbol", "") or ""
-        is_commodity = "SILVER" in sym.upper() or "GOLD" in sym.upper() or "CRUDE" in sym.upper() or premium > 500
-        step = 1000 if "SILVER" in sym.upper() else (100 if "GOLD" in sym.upper() else NIFTY_STRIKE_STEP)
+        sym_u = sym.upper()
+        is_commodity = any(c in sym_u for c in ("SILVER", "GOLD", "CRUDE", "NAT")) or premium > 500
+        if "SILVER" in sym_u:
+            step = 1000
+            min_prem, max_prem = 1000.0, 9000.0
+        elif "GOLD" in sym_u:
+            step = 100
+            min_prem, max_prem = 200.0, 3000.0
+        elif "CRUDE" in sym_u:
+            step = 50
+            min_prem, max_prem = 30.0, 500.0
+        elif "NAT" in sym_u:
+            step = 5
+            min_prem, max_prem = 5.0, 100.0
+        else:
+            step = NIFTY_STRIKE_STEP
+            min_prem, max_prem = OPTION_MIN_PREMIUM, OPTION_MAX_PREMIUM
+
         strike_distance = abs(snap.strike - atm)
         distance_penalty = min(0.45, strike_distance / max(step * 4, 1) * 0.35)
 
         if is_commodity:
-            min_prem = 1000.0 if "SILVER" in sym.upper() else 50.0
-            max_prem = 9000.0 if "SILVER" in sym.upper() else 1000.0
             premium_bonus = 0.18 if min_prem <= premium <= max_prem else -0.12
             iv_penalty = 0.0
             if snap.implied_volatility > 0.38:
@@ -3428,6 +3477,7 @@ class TradePlannerAgent:
         votes: int | dict = 0,
         is_hero_zero: bool = False,
         is_expiry_day: bool = False,
+        symbol: str = "",
     ) -> dict:
         if isinstance(votes, dict):
             counts = []
@@ -3462,6 +3512,20 @@ class TradePlannerAgent:
         )
         option_atr = max(premium * 0.14, atr_points * max(delta, 0.25))
 
+        # Resolve instrument-specific configuration
+        inst_sym = (
+            symbol
+            or market_context.get("symbol")
+            or getattr(snap, "symbol", "")
+            or os.getenv("INSTRUMENT", "CRUDEOILM")
+        )
+        inst_cfg = get_instrument_strategy_config(str(inst_sym))
+        base_sl_pct = float(inst_cfg.get("stop_loss_pct", STOP_LOSS_PCT)) / 100.0
+        base_tgt1_pct = float(inst_cfg.get("target1_pct", 12.0)) / 100.0
+        base_tgt2_pct = float(inst_cfg.get("target2_pct", TARGET_PCT)) / 100.0
+        base_be_pct = float(inst_cfg.get("breakeven_trigger_pct", 10.0)) / 100.0
+        base_tsl_pct = float(inst_cfg.get("trailing_sl_pct", 8.0)) / 100.0
+
         if is_hero_zero:
             # 25% Stop Loss for HeroZero 0DTE options with multiplier targets
             stop_distance = premium * 0.25
@@ -3469,45 +3533,43 @@ class TradePlannerAgent:
             target2_distance = stop_distance * 3.5   # ~1.85x - 2.5x
             trailing_distance = max(stop_distance * 0.85, premium * 0.25)
         elif is_expiry_day or (getattr(snap, "dte", None) is not None and snap.dte <= 1):
-            # Adaptive 20-25% breathing SL for Expiry / 0DTE options to absorb normal tick oscillation
-            sl_pct = 0.25 if atr_pct >= HIGH_VOL_ATR_PCT else 0.20
+            # Adaptive breathing SL for Expiry / 0DTE options to absorb normal tick oscillation
+            sl_pct = max(0.20, base_sl_pct * 1.5) if atr_pct >= HIGH_VOL_ATR_PCT else max(0.15, base_sl_pct * 1.25)
             stop_distance = premium * sl_pct
             target_r = max(ATR_TARGET_MULTIPLIER, 2.0)
-            target1_distance = stop_distance * 1.5
-            target2_distance = stop_distance * target_r
+            target1_distance = max(stop_distance * 1.5, premium * base_tgt1_pct)
+            target2_distance = max(stop_distance * target_r, premium * base_tgt2_pct)
             trailing_distance = max(stop_distance * 0.85, premium * sl_pct)
         else:
-            sl_pct = (STOP_LOSS_PCT / 100)
+            sl_pct = base_sl_pct
             if atr_pct >= HIGH_VOL_ATR_PCT:
-                sl_pct = max(sl_pct, 0.18) # 18% breathing room in high volatility
+                sl_pct = max(sl_pct, base_sl_pct * 1.25)  # Breathing room in high volatility
             stop_distance = premium * sl_pct
             target_r = ATR_TARGET_MULTIPLIER
             if atr_pct >= HIGH_VOL_ATR_PCT:
                 target_r *= HIGH_VOL_TARGET_COMPRESSION
-            # Vote-based target scaling: more votes = higher targets (better RR)
+            # Vote-based target scaling: realistic intraday R:R scaling
             if votes >= 3:
-                target_r *= 1.50  # +50% for 5+ votes - aggressive goal recovery
+                target_r *= 1.25
             elif votes >= 2:
-                target_r *= 1.35  # +35% for 4 votes
-            elif votes == 3:
-                target_r *= 1.20  # +20% for 3 votes (increased from 1.10)
+                target_r *= 1.15
             elif votes <= 2:
-                target_r *= 1.0  # restored for better RR
+                target_r *= 1.0
             if confidence >= TWO_LOT_CONFIDENCE_THRESHOLD:
-                target_r *= 1.08  # Increased from 1.05
+                target_r *= 1.05
             if quality_score >= PLANNER_QUALITY_SCORE_THRESH_0_72:
-                target_r *= 1.20  # Increased from 1.15
+                target_r *= 1.10
             elif quality_score < PLANNER_QUALITY_SCORE_THRESH_0_56:
-                target_r *= 0.92  # Decreased from 0.95
+                target_r *= 0.92
             if quality_score >= PLANNER_QUALITY_SCORE_THRESH_0_8:
-                target_r *= 1.12  # Increased from 1.05
+                target_r *= 1.05
             if structure_bias == "RANGING":
                 target_r *= 0.92
             if setup_type in {"breakout", "trend_pullback"} and quality_score >= PLANNER_QUALITY_SCORE_THRESH_0_68 and structure_bias != "RANGING":
-                target_r *= 1.10
-            target1_distance = stop_distance * BREAKEVEN_R_TRIGGER
-            target2_distance = stop_distance * max(target_r * 0.6, 1.8)
-            trailing_distance = max(stop_distance * 0.85, premium * sl_pct)
+                target_r *= 1.05
+            target1_distance = max(stop_distance * BREAKEVEN_R_TRIGGER, premium * base_tgt1_pct)
+            target2_distance = max(stop_distance * min(max(target_r * 0.6, 1.2), 2.0), premium * base_tgt2_pct)
+            trailing_distance = max(stop_distance * 0.85, premium * base_tsl_pct)
         if quality_score >= PLANNER_QUALITY_SCORE_THRESH_0_72:
             trailing_distance *= 1.25
         elif quality_score < PLANNER_QUALITY_SCORE_THRESH_0_56:
@@ -3626,7 +3688,9 @@ class TradePlannerAgent:
         signal_ts: datetime | None = None,
         nifty_ltp: float | None = None,
     ) -> int:
-        max_lots = max(1, int(MAX_POSITION_LOTS))
+        from config.settings.modules.session_policy import get_session_policy
+        session_policy = get_session_policy(signal_ts)
+        max_lots = min(max(1, int(MAX_POSITION_LOTS)), session_policy.max_lots)
         desired_lots = max(1, min(int(desired_lots or 1), max_lots))
         if max_lots <= 1:
             return 1

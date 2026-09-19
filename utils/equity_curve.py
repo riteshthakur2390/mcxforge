@@ -48,8 +48,8 @@ try:
     from config.settings import JOURNAL_DIR, DEPLOYED_CAPITAL, TOTAL_FUND, TRADING_MODE
 except ImportError:
     JOURNAL_DIR      = "journal"
-    TOTAL_FUND       = float(os.getenv("TOTAL_FUND", 200000.0))
-    DEPLOYED_CAPITAL = float(os.getenv("DEPLOYED_CAPITAL", 40000.0))
+    TOTAL_FUND       = float(os.getenv("TOTAL_FUND", 500000.0))
+    DEPLOYED_CAPITAL = float(os.getenv("DEPLOYED_CAPITAL", 100000.0))
     TRADING_MODE     = os.getenv("TRADING_MODE", "AUTO")
 
 LIVE_CURVE_CSV  = Path(JOURNAL_DIR) / "equity_curve.csv"
@@ -273,15 +273,21 @@ class EquityCurve:
             "end_equity":    round(end_eq, 2),
         }
 
-    def get_summary(self) -> dict:
-        """Returns high-level KPI summary for dashboard Master Journal card."""
+    def get_summary(self, symbol: str | None = None) -> dict:
+        """Returns high-level KPI summary for dashboard Master Journal card (overall or per-commodity)."""
         from utils.live_trade_history import get_live_trade_history, get_observe_trade_history
         hist = get_observe_trade_history() if self._mode == "OBSERVE" else get_live_trade_history()
-        summary = hist.summary().get("all", {})
         
-        env_fund = float(os.getenv("TOTAL_FUND", self._starting_capital or TOTAL_FUND))
-        env_deployed = float(os.getenv("DEPLOYED_CAPITAL", DEPLOYED_CAPITAL))
-        starting_cap = env_fund
+        is_isolated = bool(symbol and symbol.strip().upper() not in ("", "ALL"))
+        if is_isolated:
+            starting_cap = float(os.getenv("MAX_COMMODITY_TRADE_CAPITAL", "100000.0"))
+            env_deployed = starting_cap
+            summary = hist.summary(symbol=symbol).get("all", {})
+        else:
+            starting_cap = float(os.getenv("TOTAL_FUND", self._starting_capital or TOTAL_FUND))
+            env_deployed = float(os.getenv("DEPLOYED_CAPITAL", DEPLOYED_CAPITAL))
+            summary = hist.summary().get("all", {})
+
         trades = summary.get("trades", 0)
         wins = summary.get("wins", 0)
         losses = summary.get("losses", 0)
@@ -293,6 +299,7 @@ class EquityCurve:
         account_roi_pct = round((net_pnl / max(starting_cap, 1.0)) * 100.0, 2)
 
         return {
+            "symbol": symbol.strip().upper() if is_isolated else "ALL",
             "starting_capital": starting_cap,
             "deployed_capital": env_deployed,
             "current_equity": round(curr_equity, 2),
@@ -307,14 +314,62 @@ class EquityCurve:
             "mode": self._mode,
         }
 
-    def get_equity_curve_data(self) -> dict:
-        self._history = self._load()
-        env_fund = float(os.getenv("TOTAL_FUND", self._starting_capital or TOTAL_FUND))
+    def get_equity_curve_data(self, symbol: str | None = None) -> dict:
+        is_isolated = bool(symbol and symbol.strip().upper() not in ("", "ALL"))
+        if not is_isolated:
+            self._history = self._load()
+            env_fund = float(os.getenv("TOTAL_FUND", self._starting_capital or TOTAL_FUND))
+            return {
+                "symbol": "ALL",
+                "starting_capital": env_fund,
+                "current_equity": self.current_equity,
+                "history": self._history,
+                "mode": self._mode,
+            }
+
+        # Build dynamic day-by-day equity curve for specific commodity
+        from utils.live_trade_history import get_live_trade_history, get_observe_trade_history
+        hist = get_observe_trade_history() if self._mode == "OBSERVE" else get_live_trade_history()
+        sym_rows = hist.rows(symbol=symbol)
+        start_cap = float(os.getenv("MAX_COMMODITY_TRADE_CAPITAL", "100000.0"))
+        
+        # Group by date ascending
+        daily_map: dict[str, list[dict]] = {}
+        for r in sym_rows:
+            d = str(r.get("date", "")).strip()
+            if d:
+                daily_map.setdefault(d, []).append(r)
+
+        sorted_dates = sorted(daily_map.keys())
+        history_pts = []
+        running_equity = start_cap
+        for d in sorted_dates:
+            day_trades = daily_map[d]
+            net_day = sum(float(r.get("net_pnl_inr", r.get("realized_pnl", 0.0)) or 0.0) for r in day_trades)
+            running_equity += net_day
+            history_pts.append({
+                "date": d,
+                "starting_capital": round(running_equity - net_day, 2),
+                "ending_capital": round(running_equity, 2),
+                "net_pnl_inr": round(net_day, 2),
+                "trades": len(day_trades),
+                "wins": sum(1 for r in day_trades if float(r.get("net_pnl_inr", 0.0) or 0.0) > 0),
+            })
+
         return {
-            "starting_capital": env_fund,
-            "current_equity": self.current_equity,
-            "history": self._history,
+            "symbol": symbol.strip().upper(),
+            "starting_capital": start_cap,
+            "current_equity": round(running_equity, 2),
+            "history": history_pts,
             "mode": self._mode,
+        }
+
+    def commodity_equity_curves(self) -> dict:
+        """Returns isolated equity curve data for each commodity and overall portfolio."""
+        commodities = ["ALL", "SILVERM", "GOLDM", "CRUDEOILM", "NATGASM"]
+        return {
+            comm: self.get_equity_curve_data(symbol=None if comm == "ALL" else comm)
+            for comm in commodities
         }
 
     def get_streak_info(self) -> dict:

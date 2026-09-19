@@ -736,13 +736,16 @@ class TelegramNotifier:
             or os.getenv("TRADING_MODE", TRADING_MODE)
         ).upper()
         if "BACKTEST" in mode or mode in ("BT", "TEST"):
-            chats = [self._bt_chat] if self._bt_chat else ([self._generic_chat] if self._generic_chat else [])
+            chats = []
+            for cid in (self._bt_chat, self._generic_chat):
+                if cid and cid not in chats:
+                    chats.append(cid)
             token = self._bt_token or self._live_token or self._generic_token
             return token, chats
 
-        # Live / Observe mode: send to channel LIVE_TELEGRAM_CHAT_ID only
-        live_chat = self._live_chat or self._generic_chat
-        chats = [live_chat] if live_chat else []
+        # Live / Observe mode: send to channel -1004421622243 only
+        live_chat = self._live_chat or "-1004421622243"
+        chats = [live_chat]
         token = self._live_token or self._generic_token
         return token, chats
 

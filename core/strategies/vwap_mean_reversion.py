@@ -35,7 +35,7 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
             "vwap_deviation_pct": 0.002,         # 0.2% price stretch below/above VWAP
             "volume_confirmation": True,         # Volume > average volume
             "volume_sma_period": 20,
-            "adx_ceiling": 32.0,                 # Block only if extreme trend
+            "adx_ceiling": 38.0,                 # Block only if extreme runaway trend
             "min_choppiness": 40.0,
             "rsi_period": 14,
             "rsi_oversold": 40.0,                # Long oversold threshold
@@ -61,9 +61,9 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
         v = data["volume"]
 
         # Intraday VWAP
-        cum_vol = v.cumsum().replace(0, 1e-6)
+        cum_vol = v.cumsum()
         cum_pv = (c * v).cumsum()
-        data["vwap"] = cum_pv / cum_vol
+        data["vwap"] = (cum_pv / cum_vol.replace(0, np.nan)).ffill().fillna(c)
 
         # ATR
         tr1 = h - l
@@ -150,13 +150,20 @@ class VWAPMeanReversionStrategy(BaseCommodityStrategy):
             empty_signal.rejection_reason = "OUTSIDE_TRADING_SESSION"
             return empty_signal
 
-        # REGIME FILTER: Strictly reject if market is trending
+        # REGIME FILTER: Veto on abnormal regime or strong runaway trend
         if regime_details:
             r_obj = getattr(regime_details, "regime", None) or (
                 regime_details.get("regime") if isinstance(regime_details, dict) else None
             )
-            r_val = r_obj.value if hasattr(r_obj, "value") else str(r_obj)
-            if r_obj in (MarketRegime.TREND, MarketRegime.BREAKOUT, MarketRegime.ABNORMAL) or r_val in ("TREND", "BREAKOUT", "ABNORMAL", "TRENDING"):
+            r_val = str(r_obj.value if hasattr(r_obj, "value") else (r_obj or "")).upper()
+            r_conf = float(getattr(regime_details, "confidence", None) or (
+                regime_details.get("confidence", 0.8) if isinstance(regime_details, dict) else 0.8
+            ) or 0.8)
+            if r_obj == MarketRegime.ABNORMAL or "ABNORMAL" in r_val:
+                empty_signal.rejection_reason = f"REGIME_ABNORMAL_VETO: Market conditions marked abnormal"
+                empty_signal.decision = "NO_TRADE"
+                return empty_signal
+            if (r_obj in (MarketRegime.TREND, MarketRegime.BREAKOUT) or "TREND" in r_val or "BREAKOUT" in r_val) and r_conf >= 0.85:
                 empty_signal.rejection_reason = f"REGIME_TRENDING_VETO (Regime {r_val} hostile to mean reversion)"
                 empty_signal.decision = "NO_TRADE"
                 return empty_signal

@@ -729,11 +729,9 @@ class StrategyAgent:
         )
 
         if not ONE_SIGNAL_AT_A_TIME and MAX_CONCURRENT_SIGNALS > 1:
-            logger.warning(
-                f"[{self.NAME}] MAX_CONCURRENT_SIGNALS={MAX_CONCURRENT_SIGNALS} requested, "
-                f"but current execution stack is still single-position. "
-                f"Strategy gating can be relaxed, but full concurrent position support "
-                f"needs a PositionManager/RiskGuard refactor."
+            logger.info(
+                f"[{self.NAME}] Multi-commodity concurrent routing active: "
+                f"MAX_CONCURRENT_SIGNALS={MAX_CONCURRENT_SIGNALS} mapped to independent commodity slots."
             )
         logger.info(f"[{self.NAME}] Registered. Strategies: {total_strategies}")
 
@@ -858,35 +856,43 @@ class StrategyAgent:
         option_volume = _option_volume_proxy(df)
         mode = os.getenv(
             "BACKTEST_INDEX_VOLUME_MODE" if os.getenv("TRADING_MODE", "OBSERVE") == "BACKTEST" else "INDEX_VOLUME_MODE",
-            "option_proxy",
+            "raw",
         ).strip().lower()
 
-        if mode in {"broker", "raw"} and bool((current > 0).any()):
-            return df
+        # MCX Commodities are directly traded contracts with real broker volume.
+        # Under raw/broker mode or when traded volume is available, preserve contract volume.
+        if mode in {"broker", "raw", "auto"} and bool((current > 0).any()):
+            effective = df.copy()
+            effective["underlying_volume"] = current
+            # Clip zero-volume bars (e.g. night session lulls) to minimum 1.0 to prevent division by zero in VWAP/ratios
+            effective["volume"] = current.clip(lower=1.0)
+            return effective
 
-        if not bool((option_volume > 0).any()):
-            option_volume_cols = [
-                col for col in ("opt_total_volume", "opt_atm_volume", "opt_ce_volume", "opt_pe_volume")
-                if col in df.columns
-            ]
-            if option_volume_cols and os.getenv("TRADING_MODE", "OBSERVE") != "BACKTEST":
-                effective = df.copy()
-                effective["underlying_volume"] = current
-                effective["volume"] = 1.0
-                return effective
-            if mode in {"zero", "option_proxy", "benchmark"} and bool((current > 0).any()):
-                effective = df.copy()
-                effective["underlying_volume"] = current
-                effective["volume"] = 0.0
-                return effective
-            return df
+        # If option proxy volume is available, use it
+        if bool((option_volume > 0).any()):
+            effective = df.copy()
+            effective["underlying_volume"] = current
+            effective["volume"] = option_volume.astype(float).clip(lower=1.0)
+            return effective
 
+        # Fallback: if broker volume exists and mode is not explicitly "zero", never zero it out
+        if bool((current > 0).any()) and mode != "zero":
+            effective = df.copy()
+            effective["underlying_volume"] = current
+            effective["volume"] = current.clip(lower=1.0)
+            return effective
+
+        # If explicit zero mode requested
+        if mode == "zero" and bool((current > 0).any()):
+            effective = df.copy()
+            effective["underlying_volume"] = current
+            effective["volume"] = 0.0
+            return effective
+
+        # Baseline fallback to 1.0 to prevent division-by-zero crashes
         effective = df.copy()
         effective["underlying_volume"] = current
-        # NIFTY is an index, not a traded underlying. Broker index-volume fields
-        # are not comparable across providers; option OHLCV is the tradable
-        # volume proxy for FnO strategies.
-        effective["volume"] = option_volume.astype(float)
+        effective["volume"] = 1.0
         return effective
 
     async def on_orb(self, msg: Message) -> None:
@@ -1094,20 +1100,22 @@ class StrategyAgent:
         except Exception as exc:
             logger.debug(f"[{self.NAME}] Microstructure context unavailable: {exc}")
         hybrid_5m = self._compute_hybrid_5m_context(df)
+        if not hasattr(self, "_symbol_orb"):
+            self._symbol_orb = {}
         payload_orb_high = msg.payload.get("orb_high")
         payload_orb_low = msg.payload.get("orb_low")
-        if self._orb_high is None and payload_orb_high is not None and payload_orb_low is not None:
+        if payload_orb_high is not None and payload_orb_low is not None:
             try:
-                self._orb_high = float(payload_orb_high)
-                self._orb_low = float(payload_orb_low)
-                logger.info(
-                    f"[{self.NAME}] ORB restored from candle payload | "
-                    f"H={self._orb_high} L={self._orb_low}"
-                )
+                self._symbol_orb[current_symbol] = {
+                    "high": float(payload_orb_high),
+                    "low": float(payload_orb_low),
+                }
             except Exception:
-                self._orb_high = None
-                self._orb_low = None
-        has_orb = self._orb_high is not None
+                pass
+        sym_orb = self._symbol_orb.get(current_symbol, {})
+        current_orb_high = sym_orb.get("high")
+        current_orb_low = sym_orb.get("low")
+        has_orb = current_orb_high is not None and current_orb_low is not None
 
         # Trend persistence gate: require N consecutive same-direction candles
         persist = regime_details.get("trend_persist", 0)
@@ -1126,26 +1134,26 @@ class StrategyAgent:
         gap_fail_buffer = max(current_close_for_gap * 0.0005, 8.0)
         if (
             gap_bias == Direction.BUY_CALL.value
-            and self._orb_low is not None
-            and current_close_for_gap < float(self._orb_low) - gap_fail_buffer
+            and current_orb_low is not None
+            and current_close_for_gap < float(current_orb_low) - gap_fail_buffer
         ):
             gap_bias = Direction.BUY_PUT.value
             gap_bias_note = (
-                f"gap-up failed below ORB low {float(self._orb_low):.1f}; "
+                f"gap-up failed below ORB low {float(current_orb_low):.1f}; "
                 f"close={current_close_for_gap:.1f}"
             )
         elif (
             gap_bias == Direction.BUY_PUT.value
-            and self._orb_high is not None
-            and current_close_for_gap > float(self._orb_high) + gap_fail_buffer
+            and current_orb_high is not None
+            and current_close_for_gap > float(current_orb_high) + gap_fail_buffer
         ):
             gap_bias = Direction.BUY_CALL.value
             gap_bias_note = (
-                f"gap-down failed above ORB high {float(self._orb_high):.1f}; "
+                f"gap-down failed above ORB high {float(current_orb_high):.1f}; "
                 f"close={current_close_for_gap:.1f}"
             )
         if gap_bias_note:
-            logger.info(f"[{self.NAME}] Intraday gap bias override | {gap_bias_note} | bias={gap_bias}")
+            logger.info(f"[{self.NAME}] Intraday gap bias override for {current_symbol} | {gap_bias_note} | bias={gap_bias}")
 
         hybrid_5m_anchor = self._compute_hybrid_5m_strategy_anchor(
             df=df,
@@ -1175,11 +1183,22 @@ class StrategyAgent:
                 base_min_votes = int(inst_cfg["min_votes"])
         except Exception:
             pass
-        adaptive_min_votes = max(4, int(adaptive_gates.min_votes or base_min_votes))
+
+        # Session-aware consensus threshold integration
+        session_policy = None
+        try:
+            from config.settings.modules.session_policy import get_session_policy
+            session_policy = get_session_policy(current_ts, symbol=active_sym)
+            base_min_votes = max(base_min_votes, session_policy.min_strategy_votes)
+        except Exception:
+            session_policy = None
+
+        min_floor_limit = session_policy.min_strategy_votes if session_policy else 4
+        adaptive_min_votes = max(min_floor_limit, int(adaptive_gates.min_votes or base_min_votes))
         adaptive_loosened = bool(adaptive_gates.loosened)
         adaptive_reason = str(adaptive_gates.reason or "")
         if adaptive_backtest_disabled or adaptive_live_disabled:
-            adaptive_min_votes = max(4, base_min_votes)
+            adaptive_min_votes = max(min_floor_limit, base_min_votes)
             adaptive_loosened = False
             disabled_reason = (
                 "backtest_adaptive_disabled"
@@ -1326,14 +1345,14 @@ class StrategyAgent:
         if self._is_backtest:
             results = []
             for meta in eligible:
-                results.append(_run_strategy_sync(meta, df, cache, self._orb_high, self._orb_low, strategy_context))
+                results.append(_run_strategy_sync(meta, df, cache, current_orb_high, current_orb_low, strategy_context))
         else:
             loop    = asyncio.get_event_loop()
             futures = [
                 loop.run_in_executor(
                     self._pool,
                     _run_strategy_sync,
-                    meta, df, cache, self._orb_high, self._orb_low, strategy_context,
+                    meta, df, cache, current_orb_high, current_orb_low, strategy_context,
                 )
                 for meta in eligible
             ]
@@ -1411,6 +1430,18 @@ class StrategyAgent:
                     result["confidence"] = round(adjusted, 4)
                     result.setdefault("meta", {})["options_flow_contra"] = flow_signal.to_dict()
 
+        # Session policy strategy preference boost / discouragement
+        if session_policy is not None:
+            for result in results:
+                if result.get("direction") == Direction.NONE:
+                    continue
+                strat_name = str(result.get("name", "") or "")
+                orig_conf = float(result.get("confidence", 0.0) or 0.0)
+                if strat_name in session_policy.preferred_strategies:
+                    result["confidence"] = round(min(RUNNER_CONF_MAX, orig_conf + 0.04), 4)
+                elif strat_name in session_policy.discouraged_strategies:
+                    result["confidence"] = round(max(0.0, orig_conf - 0.08), 4)
+
         # Ensemble vote
         vote_regime_label = _regime_weight_label(detailed_regime, signal_regime.value)
         wyckoff_dict = regime_details.get("wyckoff", {}) or {}
@@ -1426,13 +1457,18 @@ class StrategyAgent:
             wyckoff_dict,
             current_ts,
         )
+        eval_sym = str(msg.payload.get("symbol") or os.getenv("INSTRUMENT", "SILVERM")).upper()
         call_votes = self._annotate_votes(
             raw_call_votes,
             vote_regime_label,
+            symbol=eval_sym,
+            current_time=current_ts,
         )
         put_votes = self._annotate_votes(
             raw_put_votes,
             vote_regime_label,
+            symbol=eval_sym,
+            current_time=current_ts,
         )
         call_summary = self._summarize_votes(call_votes)
         put_summary = self._summarize_votes(put_votes)
@@ -1748,15 +1784,40 @@ class StrategyAgent:
             )
             return
 
-        # HARD CONSENSUS FLOOR: Require at least 4 agreeing strategy votes.
-        # If fewer than 4 strategies agree, treat strictly as sub-threshold noise (no signals, no rejections).
-        if len(winning) < 4:
+        # CONSENSUS FLOOR: In Morning, require at least 5 agreeing strategy votes; in Evening, require 4 (or 3 if early trigger).
+        # Sub-threshold counts below min_floor are treated strictly as sub-threshold noise.
+        min_floor = session_policy.min_strategy_votes if session_policy else (3 if ALLOW_SUBMIN_VOTE_EARLY_TRIGGER else 4)
+        if len(winning) < min_floor:
             logger.debug(
-                f"[{self.NAME}] Sub-threshold consensus ({len(winning)} votes < 4 required) | "
+                f"[{self.NAME}] Sub-threshold consensus ({len(winning)} votes < {min_floor} required in {getattr(session_policy, 'session_name', 'session')}) | "
                 f"market_ts={current_ts.strftime('%Y-%m-%d %H:%M IST')} | "
                 f"winning={[r['name'] for r in winning]}"
             )
-            return
+        # ── Multi-Timeframe Macro Trend Alignment (MTF) Protection ───────────
+        # On a confirmed strong trend expansion day (> +0.75% or < -0.75% from day open),
+        # counter-trend signals require strict consensus (>= 6 votes) during prime US hours (17:00-23:30).
+        try:
+            day_mask = df.index.date == current_ts.date() if hasattr(df.index, "date") else None
+            day_df = df[day_mask] if day_mask is not None and day_mask.any() else df
+            day_open = float(day_df["open"].iloc[0])
+            day_chg_pct = ((ltp - day_open) / max(day_open, 1.0)) * 100.0
+            
+            is_prime_us_session = current_ts.hour >= 17
+            if is_prime_us_session:
+                if day_chg_pct >= 0.75 and direction == Direction.BUY_PUT and len(winning) < 6:
+                    logger.info(
+                        f"[{self.NAME}] MTF Trend Protection: Market up {day_chg_pct:+.2f}% on the day. "
+                        f"Suppressing counter-trend BUY_PUT ({len(winning)}/6 votes required) during US expansion session."
+                    )
+                    return
+                elif day_chg_pct <= -0.75 and direction == Direction.BUY_CALL and len(winning) < 6:
+                    logger.info(
+                        f"[{self.NAME}] MTF Trend Protection: Market down {day_chg_pct:+.2f}% on the day. "
+                        f"Suppressing counter-trend BUY_CALL ({len(winning)}/6 votes required) during US expansion session."
+                    )
+                    return
+        except Exception as e:
+            logger.debug(f"[{self.NAME}] MTF trend evaluation skipped: {e}")
 
         best_conf  = max(r["confidence"] for r in winning)
         early_trigger = False
@@ -2557,16 +2618,22 @@ class StrategyAgent:
             candle_now = datetime.now(IST)
 
         current_setup_type = str(setup.setup_type or "")
+        if not hasattr(self, "_symbol_last_signal"):
+            self._symbol_last_signal = {}
+        last_sig = self._symbol_last_signal.get(current_symbol, {})
+        last_dir = last_sig.get("direction")
+        last_setup = last_sig.get("setup_type")
+        last_time = last_sig.get("time")
         if (
-            self._last_signal_direction == direction.value
-            and self._last_signal_setup_type == current_setup_type
-            and self._last_signal_time is not None
+            last_dir == direction.value
+            and last_setup == current_setup_type
+            and last_time is not None
         ):
-            elapsed_secs = (candle_now - self._last_signal_time).total_seconds()
+            elapsed_secs = (candle_now - last_time).total_seconds()
             elapsed_mins = int(elapsed_secs // 60)
             if elapsed_mins < cooldown_minutes:
                 logger.info(
-                    f"[{self.NAME}] [WAIT] Cooldown: same direction/setup {direction.value}/{current_setup_type} "
+                    f"[{self.NAME}] [WAIT] Cooldown: same direction/setup {direction.value}/{current_setup_type} for {current_symbol} "
                     f"fired {elapsed_mins}m ago (candle time), skipping"
                 )
                 return
@@ -2733,7 +2800,7 @@ class StrategyAgent:
             )
 
             rejected_reason = None
-            if 10.0 <= now_tod < 11.5 and not has_anchor and len(winning) < 5:
+            if 10.0 <= now_tod < 11.5 and not has_anchor and len(winning) < 5 and not strong_confluence:
                 rejected_reason = f"morning_trap_low_votes: {len(winning)} < 5 at {now_hhmm}"
             elif not has_anchor and len(winning) < 5 and not strong_confluence:
                 rejected_reason = "missing_structural_anchor: require >= 5 votes"
@@ -2799,6 +2866,13 @@ class StrategyAgent:
         self._last_signal_time = candle_now
         self._last_signal_direction = direction.value
         self._last_signal_setup_type = current_setup_type
+        if not hasattr(self, "_symbol_last_signal"):
+            self._symbol_last_signal = {}
+        self._symbol_last_signal[current_symbol] = {
+            "direction": direction.value,
+            "setup_type": current_setup_type,
+            "time": candle_now,
+        }
         self._remember_signal(signal)
 
         logger.info(
@@ -3243,12 +3317,12 @@ class StrategyAgent:
     @staticmethod
     def _should_allow_early_trigger(
         *,
-        votes: int = 4,
+        votes: int = 3,
         best_conf: float,
         weighted_score: float,
         setup,
     ) -> bool:
-        if votes < 4:
+        if votes < 3:
             return False
         setup_type = str(getattr(setup, "setup_type", "") or "").lower()
         setup_strength = float(getattr(setup, "setup_strength", 0.0) or 0.0)
@@ -3301,17 +3375,55 @@ class StrategyAgent:
     def _strategy_vote_weight(
         strategy_name: str,
         regime_label: str,
+        symbol: str | None = None,
+        current_time: datetime | None = None,
     ) -> tuple[float, float, float]:
         base_weight = float(STRATEGY_BASE_WEIGHTS.get(strategy_name, 1.0))
         regime_map = STRATEGY_REGIME_WEIGHTS.get(regime_label, {})
         regime_weight = float(regime_map.get(strategy_name, 1.0))
-        adjusted = round(base_weight * regime_weight, 4)
+
+        # Intraday Commodity Session Profile Multiplier
+        session_mult = 1.0
+        if current_time is not None and symbol:
+            sym_upper = symbol.upper()
+            hour = current_time.hour
+            minute = current_time.minute
+            time_val = hour + minute / 60.0
+
+            # 1. US Session / High-Momentum Evening Window (17:00 - 23:30 IST)
+            if 17.0 <= time_val <= 23.5:
+                if any(k in sym_upper for k in ("CRUDE", "NATGAS")):
+                    # Energy contracts experience peak liquidity and momentum
+                    if any(t in strategy_name for t in ("Momentum", "SuperTrend", "EMASlope", "Breakout", "ADX", "Volume")):
+                        session_mult = 1.25
+                elif any(k in sym_upper for k in ("GOLD", "SILVER")):
+                    if any(t in strategy_name for t in ("Momentum", "SuperTrend", "Breakout", "OrderBlock")):
+                        session_mult = 1.15
+
+            # 2. Indian Morning Session (09:00 - 12:30 IST)
+            elif 9.0 <= time_val < 12.5:
+                # Range-bound morning: boost mean reversion, dampen breakout to avoid traps
+                if any(mr in strategy_name for mr in ("MeanReversion", "Bollinger", "VWAP", "CPR")):
+                    session_mult = 1.20
+                elif any(bo in strategy_name for bo in ("Breakout", "Squeeze")):
+                    session_mult = 0.85
+
+            # 3. European Crossover Session (12:30 - 17:00 IST)
+            elif 12.5 <= time_val < 17.0:
+                if any(k in sym_upper for k in ("GOLD", "SILVER")):
+                    # Metals begin trending with London Bullion market
+                    if any(t in strategy_name for t in ("Pullback", "SuperTrend", "Trend", "MACD")):
+                        session_mult = 1.15
+
+        adjusted = round(base_weight * regime_weight * session_mult, 4)
         return base_weight, regime_weight, adjusted
 
     def _annotate_votes(
         self,
         candidates: list[dict],
         regime_label: str,
+        symbol: str | None = None,
+        current_time: datetime | None = None,
     ) -> list[dict]:
         strategy_scores: dict[str, float] = {}
         for c in candidates:
@@ -3321,18 +3433,18 @@ class StrategyAgent:
             if name:
                 strategy_scores[name] = max(strategy_scores.get(name, 0.0), conf)
 
-        # Calculate WEIGHTED votes based on strategy performance
+        # Calculate WEIGHTED votes based on strategy performance & session profile
         weighted_votes = 0.0
         for name, conf in strategy_scores.items():
             if conf >= MIN_STRATEGY_CONF:
-                _, _, weight = self._strategy_vote_weight(name, regime_label)
+                _, _, weight = self._strategy_vote_weight(name, regime_label, symbol, current_time)
                 weighted_votes += weight
 
         for c in candidates:
             lead = c.get("lead_confidence", {})
             name = str(lead.get("name") or c.get("name") or "")
             conf = float(lead.get("confidence", c.get("confidence", 0.0)) or 0.0)
-            base_weight, regime_weight, vote_weight = self._strategy_vote_weight(name, regime_label)
+            base_weight, regime_weight, vote_weight = self._strategy_vote_weight(name, regime_label, symbol, current_time)
             weighted_score = conf * vote_weight if conf >= MIN_STRATEGY_CONF else 0.0
             # Use weighted votes instead of flat count
             c["votes"] = weighted_votes
@@ -3348,11 +3460,11 @@ class StrategyAgent:
             c["strategy_combo"] = sorted(strategy_scores.keys())
             # Weighted average confidence
             weighted_conf_sum = sum(
-                conf * self._strategy_vote_weight(name, regime_label)[2]
+                conf * self._strategy_vote_weight(name, regime_label, symbol, current_time)[2]
                 for name, conf in strategy_scores.items()
             )
             total_weight = sum(
-                self._strategy_vote_weight(name, regime_label)[2]
+                self._strategy_vote_weight(name, regime_label, symbol, current_time)[2]
                 for name in strategy_scores.keys()
             )
             c["avg_confidence"] = (
@@ -3544,13 +3656,18 @@ class StrategyAgent:
         if remaining_rr is not None and remaining_rr < 0.75 and ext_atr > 1.80:
             rejection_reasons.append("POOR_REMAINING_RR")
 
-        # Institutional breakout exemption
+        # Institutional breakout exemption: requires true multi-category breadth (4+ categories)
+        # or strong setup strength with at least 3 categories. High confidence alone from lagging indicators
+        # must NOT exempt late extended entries.
+        is_breakout_setup = str(setup_type or "").lower() in {"breakout", "vote_aligned", "trend_pullback"}
         is_exempt = (
-            str(setup_type or "").lower() in {"breakout", "vote_aligned", "trend_pullback"}
-            and (indep_cat_count >= 4 or setup_strength >= 0.75 or confidence >= 0.90)
+            is_breakout_setup
+            and (indep_cat_count >= 4 or (setup_strength >= 0.80 and indep_cat_count >= 3))
         )
-        # Climax/Exhaustion protection: Do not exempt EXHAUSTION_RISK if low category breadth unless setup strength/confidence is high
-        if "EXHAUSTION_RISK" in rejection_reasons and indep_cat_count < 3 and setup_strength < 0.80 and confidence < 0.90:
+        # Climax/Exhaustion protection: Do not exempt EXHAUSTION_RISK if low category breadth
+        if "EXHAUSTION_RISK" in rejection_reasons and indep_cat_count < 3:
+            is_exempt = False
+        if "OVEREXTENDED_FROM_VWAP" in rejection_reasons and indep_cat_count < 4:
             is_exempt = False
 
         # Determine strongest rejection conditions
@@ -4524,6 +4641,21 @@ class StrategyAgent:
         df: pd.DataFrame,
         has_orb: bool,
     ) -> StrategyReadiness:
+        # 1. Per-instrument strategy whitelist check
+        active_sym = str(getattr(self, "_active_symbol", None) or os.getenv("INSTRUMENT", "SILVERM")).upper()
+        try:
+            from instruments.registry import get_instrument_strategy_config
+            inst_strat_cfg = get_instrument_strategy_config(active_sym)
+            enabled_strats = inst_strat_cfg.get("enabled_strategies")
+            if enabled_strats is not None and meta.name not in enabled_strats:
+                return StrategyReadiness(
+                    ready=False,
+                    required_candles=meta.min_candles,
+                    reason=f"disabled for {active_sym} in strategy registry",
+                )
+        except Exception:
+            pass
+
         n = len(df)
         if n < meta.min_candles:
             return StrategyReadiness(

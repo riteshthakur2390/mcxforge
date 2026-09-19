@@ -37,6 +37,7 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 import numpy as np
 import pandas as pd
 import pytz
+from loguru import logger
 
 from instruments.base import InstrumentConfig
 from instruments import SILVERMIC_CONFIG, SILVERM_CONFIG
@@ -378,18 +379,16 @@ def build_default_strategy_suite(catalog_only: bool = False) -> List[BaseCommodi
 
 
 TOXIC_COMMODITY_STRATEGIES = {
-    # Lagging breakout and false-whipsaw models that erode capital in chop (opt-in pruning)
-    "EMASlope", "DonchianBreakout", "ValueArea", "OpeningRangeBreakout",
-    "UTBot", "StochRSI", "MomentumVolumeBreakout", "OIAnalysis", "FVG", "ADX+PSAR",
-    "VolatilityBreakout", "SuperTrend+RSI", "BBMeanReversion", "RangeSpread", "Ichimoku",
-    "SqueezeMomentum", "GoldSilverPairs",
+    # Proven lagging indicators that generate severe whipsaws and late entries in 5m MCX intraday chop:
+    # (Ichimoku -₹44k, SuperTrend+RSI -₹38k, TrendFollowing -₹27k, HeikinAshi -₹11k, VWAP+EMA -₹27k, EMASlope -₹5k)
+    "Ichimoku", "SuperTrend+RSI", "TrendFollowing", "HeikinAshi", "VWAP+EMA", "EMASlope",
 }
 
 
 def build_quality_strategy_suite(prune_toxic: Optional[bool] = None) -> List[BaseCommodityStrategy]:
     """
-    Returns active strategies for MCX Commodity Futures.
-    Defaults to all active strategies unless PRUNE_TOXIC_STRATEGIES=true is explicitly set.
+    Returns active high-quality strategies for MCX Commodity Futures.
+    Prunes toxic lagging indicators by default unless explicitly disabled.
     """
     full_suite = build_default_strategy_suite()
     if prune_toxic is None:
@@ -556,8 +555,13 @@ class CommodityEnsembleEngine:
 
         warmup = 30
         n_bars = len(work_df)
+        log_interval = max(300, (n_bars - warmup) // 5)
 
         for i in range(warmup, n_bars):
+            if (i - warmup) > 0 and (i - warmup) % log_interval == 0:
+                pct = int((i - warmup) / (n_bars - warmup) * 100)
+                logger.info(f"[{self.config.symbol}] Backtest progress: {pct}% ({i}/{n_bars} bars | {len(completed_trades)} trades executed so far)")
+
             bar = work_df.iloc[i]
             bar_time = work_df.index[i].to_pydatetime()
             bar_open = float(bar["open"])
@@ -611,41 +615,45 @@ class CommodityEnsembleEngine:
                 # Progressive profit locking activates once the position has established (candles_held >= 1).
                 # Entry candle (candles_held == 0) is protected by the structural initial stop loss (pos_sl).
                 candles_held = i - pos_entry_idx
-                risk_pts = max(abs(pos_entry_price - pos_sl), 50.0)
+                slip_pts = self.slippage_model.calculate_slippage_points(bar_close, tick_size)
+                min_tick_risk = max(tick_size * 5.0, pos_entry_price * 0.0015)
+                risk_pts = max(abs(pos_entry_price - pos_sl), min_tick_risk)
                 mfe_pct = (mfe_pts / max(pos_entry_price, 1e-4)) * 100.0
                 opt_gain_pct = mfe_pct * 20.0  # Option leverage approx (Delta 0.50, Premium ~2.5% of spot)
 
                 if candles_held >= 1:
-                    # Tier 1: Fee-Guaranteed Breakeven Lock (+0.70R / Spot +0.35% / Option +7.0% gain)
-                    if mfe_pts >= 0.70 * risk_pts or opt_gain_pct >= 7.0 or mfe_pct >= 0.35:
-                        be_buf = max(75.0, 0.12 * risk_pts)
+                    # Instrument-scaled cost-covering buffer (approx 0.06% of spot + 2 ticks slippage)
+                    cost_pts = (pos_entry_price * 0.0006) + (2.0 * slip_pts)
+                    be_buf = max(cost_pts, 0.15 * risk_pts)
+
+                    # Tier 1: Fee-Guaranteed Breakeven Lock at +1.20R gain
+                    if mfe_pts >= 1.20 * risk_pts:
                         if is_long:
                             pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + be_buf)
                         else:
                             pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - be_buf)
 
-                    # Tier 2: Solid Expansion Lock (+1.20R / Spot +0.60% / Option +12.0% gain)
-                    if mfe_pts >= 1.20 * risk_pts or opt_gain_pct >= 12.0 or mfe_pct >= 0.60:
-                        if is_long:
-                            pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + (0.40 * risk_pts))
-                        else:
-                            pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - (0.40 * risk_pts))
-
-                    # Tier 3: High Momentum Lock (+1.80R / Spot +0.90% / Option +18.0% gain)
-                    if mfe_pts >= 1.80 * risk_pts or opt_gain_pct >= 18.0 or mfe_pct >= 0.90:
+                    # Tier 2: Solid Expansion Lock at +1.80R gain (locks +0.80R profit)
+                    if mfe_pts >= 1.80 * risk_pts:
                         if is_long:
                             pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + (0.80 * risk_pts))
                         else:
                             pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - (0.80 * risk_pts))
 
-                    # Tier 4: Super Runner (+2.50R+ / Spot +1.20%+ / Option +24.0%+)
-                    # Trails 0.80R behind peak excursion so large 3000-5000 pt moves can run!
-                    if mfe_pts >= 2.50 * risk_pts or opt_gain_pct >= 24.0 or mfe_pct >= 1.20:
+                    # Tier 3: High Momentum Lock at +2.50R gain (locks +1.50R profit)
+                    if mfe_pts >= 2.50 * risk_pts:
+                        if is_long:
+                            pos_trailing_sl = max(pos_trailing_sl, pos_entry_price + (1.50 * risk_pts))
+                        else:
+                            pos_trailing_sl = min(pos_trailing_sl, pos_entry_price - (1.50 * risk_pts))
+
+                    # Tier 4: Super Runner at +3.50R+ gain (trails 1.0R behind peak)
+                    if mfe_pts >= 3.50 * risk_pts:
                         peak_level = pos_entry_price + mfe_pts if is_long else pos_entry_price - mfe_pts
                         if is_long:
-                            pos_trailing_sl = max(pos_trailing_sl, peak_level - (0.80 * risk_pts))
+                            pos_trailing_sl = max(pos_trailing_sl, peak_level - (1.00 * risk_pts))
                         else:
-                            pos_trailing_sl = min(pos_trailing_sl, peak_level + (0.80 * risk_pts))
+                            pos_trailing_sl = min(pos_trailing_sl, peak_level + (1.00 * risk_pts))
 
                 exit_triggered = False
                 exit_price = 0.0
@@ -807,31 +815,86 @@ class CommodityEnsembleEngine:
                             sell_signals.append(sig)
 
                 # Check vote consensus
-                if buy_votes >= self.min_votes and buy_votes > sell_votes and buy_signals:
+                # Instrument-scaled default SL and TP based on commodity characteristics
+                sym_up = self.config.symbol.upper()
+                if "CRUDE" in sym_up:
+                    def_sl_pts = max(120.0, bar_close * 0.012)   # 120-140 pts
+                    def_tp_pts = max(240.0, bar_close * 0.025)   # 240-300 pts
+                elif any(k in sym_up for k in ("NATGAS", "NATURAL")):
+                    def_sl_pts = max(4.0, bar_close * 0.015)     # 4-5 pts
+                    def_tp_pts = max(8.0, bar_close * 0.030)     # 8-12 pts
+                elif "GOLD" in sym_up:
+                    def_sl_pts = max(600.0, bar_close * 0.005)   # 600-800 pts
+                    def_tp_pts = max(1200.0, bar_close * 0.010)  # 1200-1600 pts
+                else:  # SILVER / SILVERM / SILVERMIC
+                    def_sl_pts = max(1200.0, bar_close * 0.007)  # 1200-1800 pts
+                    def_tp_pts = max(2400.0, bar_close * 0.014)  # 2400-3600 pts
+
+                max_sl_distance = def_sl_pts * 1.8
+
+                buy_cats = count_independent_categories(buy_fired)
+                sell_cats = count_independent_categories(sell_fired)
+
+                # Late Entry & Exhaustion Guard (Shared with Live StrategyAgent):
+                # Never buy/sell into an extended move >2.25 ATR from EMA20
+                atr_val = float(slice_df["atr"].iloc[-1]) if "atr" in slice_df.columns else (bar_high - bar_low)
+                ema20_val = float(slice_df["ema20"].iloc[-1]) if "ema20" in slice_df.columns else (
+                    float(slice_df["close"].ewm(span=20).mean().iloc[-1]) if len(slice_df) >= 20 else bar_close
+                )
+                dist_ema_atr = abs(bar_close - ema20_val) / max(atr_val, 1e-4) if atr_val > 0 else 0.0
+                is_exhausted = dist_ema_atr >= 2.25
+
+                if (
+                    buy_votes >= self.min_votes
+                    and buy_cats >= self.min_categories
+                    and buy_votes > sell_votes
+                    and buy_signals
+                    and not is_exhausted
+                ):
                     best_sig = max(buy_signals, key=lambda s: s.confidence)
-                    sl = best_sig.stop_loss if best_sig.stop_loss < bar_close else round(bar_close - max(150.0, bar_close * 0.007), 1)
-                    tp = best_sig.target if best_sig.target > bar_close else round(bar_close + max(300.0, bar_close * 0.014), 1)
+                    raw_sl_dist = (bar_close - best_sig.stop_loss) if (best_sig.stop_loss and best_sig.stop_loss < bar_close) else def_sl_pts
+                    sl_dist = max(def_sl_pts, min(raw_sl_dist, max_sl_distance))
+                    sl = bar_close - sl_dist
+
+                    raw_tp_dist = (best_sig.target - bar_close) if (best_sig.target and best_sig.target > bar_close) else def_tp_pts
+                    tp_dist = max(def_tp_pts, min(raw_tp_dist, def_tp_pts * 2.5))
+                    tp = round(bar_close + tp_dist, 1)
+
                     pending_signal = {
                         "direction": Direction.BUY,
-                        "stop_loss": sl,
+                        "stop_loss": round(sl, 1),
                         "target": tp,
                         "session": session_now.value,
                         "strategies": buy_fired,
                         "lead_strategy": best_sig.strategy,
                         "votes": buy_votes,
+                        "categories": buy_cats,
                     }
-                elif sell_votes >= self.min_votes and sell_votes > buy_votes and sell_signals:
+                elif (
+                    sell_votes >= self.min_votes
+                    and sell_cats >= self.min_categories
+                    and sell_votes > buy_votes
+                    and sell_signals
+                    and not is_exhausted
+                ):
                     best_sig = max(sell_signals, key=lambda s: s.confidence)
-                    sl = best_sig.stop_loss if best_sig.stop_loss > bar_close else round(bar_close + max(150.0, bar_close * 0.007), 1)
-                    tp = best_sig.target if best_sig.target < bar_close else round(bar_close - max(300.0, bar_close * 0.014), 1)
+                    raw_sl_dist = (best_sig.stop_loss - bar_close) if (best_sig.stop_loss and best_sig.stop_loss > bar_close) else def_sl_pts
+                    sl_dist = max(def_sl_pts, min(raw_sl_dist, max_sl_distance))
+                    sl = bar_close + sl_dist
+
+                    raw_tp_dist = (bar_close - best_sig.target) if (best_sig.target and best_sig.target < bar_close) else def_tp_pts
+                    tp_dist = max(def_tp_pts, min(raw_tp_dist, def_tp_pts * 2.5))
+                    tp = round(bar_close - tp_dist, 1)
+
                     pending_signal = {
                         "direction": Direction.SELL,
-                        "stop_loss": sl,
+                        "stop_loss": round(sl, 1),
                         "target": tp,
                         "session": session_now.value,
                         "strategies": sell_fired,
                         "lead_strategy": best_sig.strategy,
                         "votes": sell_votes,
+                        "categories": sell_cats,
                     }
 
         # Calculate metrics

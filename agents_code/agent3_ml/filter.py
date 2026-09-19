@@ -122,6 +122,15 @@ REDUCED_BUDGET_STRONG_MIN_SETUP = float(
 if not hasattr(Topic, "MODEL_RETRAINED"):
     Topic.MODEL_RETRAINED = "MODEL_RETRAINED"
 
+
+def _extract_votes(val) -> int:
+    if isinstance(val, dict):
+        return sum(1 for v in val.values() if v)
+    try:
+        return int(val or 0)
+    except (TypeError, ValueError):
+        return 0
+
 #  STRATEGY TIER CLASSIFICATION 
 # HIGH-value strategy combos  these pairs have the most independent signals
 _HIGH_VALUE_STRATEGIES = {"Ichimoku", "OIAnalysis", "VolumeProfile", "CPR", "LiqSweep",
@@ -239,7 +248,7 @@ def _dynamic_threshold(
         s_sorted = sorted(strat_set)
         tags.append(f"weak_pair_{'_'.join(s[:3].lower().replace('+', '_') for s in s_sorted)}")
 
-    # 3. Session time penalties
+    # 3. Session time & regime policy adjustments
     if timestamp is not None:
         try:
             h, m = timestamp.hour, timestamp.minute
@@ -252,6 +261,26 @@ def _dynamic_threshold(
                 tags.append("late_session_penalty")
         except Exception:
             pass
+
+    try:
+        from config.settings.modules.session_policy import get_session_policy
+        session_policy = get_session_policy(timestamp)
+        if session_policy.session_name == "MORNING":
+            threshold += 0.04
+            tags.append("session_morning_caution")
+        elif session_policy.session_name == "EVENING":
+            threshold -= 0.03
+            tags.append("session_evening_boost")
+
+        strat_set = set(strategies)
+        if any(s in strat_set for s in session_policy.preferred_strategies):
+            threshold -= 0.02
+            tags.append("session_preferred_strategy")
+        if any(s in strat_set for s in session_policy.discouraged_strategies):
+            threshold += 0.04
+            tags.append("session_discouraged_strategy")
+    except Exception:
+        pass
 
     #  Reliefs (lower threshold = easier to pass) 
 
@@ -321,14 +350,32 @@ class MLFilterAgent:
     NAME = "MLFilterAgent"
 
     @staticmethod
-    def _candidate_model_paths(timeframe: str) -> list[tuple[Path, str, bool]]:
+    def _candidate_model_paths(timeframe: str, symbol: str | None = None) -> list[tuple[Path, str, bool]]:
         models_dir = Path(ML_MODELS_DIR)
         requested = str(timeframe or "").strip() or "5minute"
-        prefixes = ["silvermic", "commodity", "nifty"]
+        
+        sym_clean = str(symbol or "").strip().lower()
+        prefixes = []
+        if sym_clean:
+            if "silver" in sym_clean:
+                prefixes.extend(["silverm", "silvermic"])
+            elif "gold" in sym_clean:
+                prefixes.extend(["goldm", "gold"])
+            elif "crude" in sym_clean:
+                prefixes.extend(["crudeoilm", "crudeoil"])
+            elif "nat" in sym_clean:
+                prefixes.extend(["natgasm", "natgasmini", "naturalgas"])
+            else:
+                prefixes.append(sym_clean)
+        prefixes.extend(["silverm", "silvermic", "commodity", "nifty"])
+        # Deduplicate while preserving order
+        seen_p = set()
+        deduped_prefixes = [p for p in prefixes if not (p in seen_p or seen_p.add(p))]
+
         candidates: list[tuple[Path, str, bool]] = []
 
         # 1. Exact match for requested timeframe across priority prefixes
-        for prefix in prefixes:
+        for prefix in deduped_prefixes:
             path = models_dir / f"{prefix}_{requested}.pkl"
             candidates.append((path, requested, False))
 
@@ -342,7 +389,7 @@ class MLFilterAgent:
         }.get(requested, ["5minute", "1minute"])
 
         for fallback_tf in fallback_order:
-            for prefix in prefixes:
+            for prefix in deduped_prefixes:
                 path = models_dir / f"{prefix}_{fallback_tf}.pkl"
                 if not any(c[0] == path for c in candidates):
                     candidates.append((path, fallback_tf, True))
@@ -389,7 +436,7 @@ class MLFilterAgent:
             if signal_minutes >= 15 * 60 + 20:
                 return False, "late_session_penalty"
             if direction == "BUY_CALL" and 9 * 60 + 30 <= signal_minutes < 10 * 60:
-                votes = int(data.get("strategy_votes") or data.get("votes") or 0)
+                votes = _extract_votes(data.get("strategy_votes") or data.get("votes"))
                 setup_strength = float(data.get("setup_strength") or 0.0)
                 if not (votes >= 5 and setup_strength >= 0.50):
                     return False, "morning_chop_call_bias"
@@ -434,12 +481,16 @@ class MLFilterAgent:
         self._prefetch_votes: int   = 0
         self._prefetch_dir:   str   = ""
         self._prefetch_df:    Union[pd.DataFrame, None] = None
+        self._symbol_prefetched_features: dict[str, dict] = {}
+        self._symbol_prefetch_df: dict[str, pd.DataFrame] = {}
+        self._symbol_prefetch_dir: dict[str, str] = {}
+        self._symbol_regime_info: dict[str, dict] = {}
         self._latest_regime_info: dict = {}
         self._latest_signal_context: dict = {}
         self._latest_strategies: list[str] = []
-        self._call_recovery_watch: dict[str, dict] = {}
-
         self._approval_day = datetime.now(IST).date().isoformat()
+        self._ensembles: dict[str, SignalForgeEnsemble] = {}
+        self._symbol_dfs: dict[str, pd.DataFrame] = {}
         self._daily_approvals = 0
         self._session_approvals = {k: 0 for k in SIGNAL_SESSION_BUDGETS}
         self._regime_approvals = {k: 0 for k in SIGNAL_REGIME_BUDGETS}
@@ -491,14 +542,19 @@ class MLFilterAgent:
 
     async def on_candles_prefetch(self, msg: Message) -> None:
         """
-        Called on EVERY candle  pre-extracts features in background.
+        Called on EVERY candle — pre-extracts features in background per commodity.
         When RAW_SIGNAL fires 80ms later, features are already ready.
         This hides the 30ms feature extraction cost completely.
         """
         candles = msg.payload.get("candles", [])
+        sym = str(msg.payload.get("symbol") or os.getenv("COMMODITY", "SILVERM")).upper()
         if not candles or len(candles) < ML_LOOKBACK_CANDLES:
             self._prefetched_features = None
             self._prefetch_df = None
+            if hasattr(self, "_symbol_prefetched_features"):
+                self._symbol_prefetched_features.pop(sym, None)
+            if hasattr(self, "_symbol_prefetch_df"):
+                self._symbol_prefetch_df.pop(sym, None)
             return
 
         if os.environ.get("TRADING_MODE") == "BACKTEST":
@@ -506,8 +562,13 @@ class MLFilterAgent:
             # Only keep the df reference for on-demand extraction.
             try:
                 df = pd.DataFrame(candles)
-                df["datetime"] = pd.to_datetime(df["datetime"])
-                self._prefetch_df = df.set_index("datetime").sort_index()
+                dt_col = "datetime" if "datetime" in df.columns else ("timestamp" if "timestamp" in df.columns else df.columns[0])
+                df["datetime"] = pd.to_datetime(df[dt_col])
+                clean_df = df.set_index("datetime").sort_index()
+                self._prefetch_df = clean_df
+                if not hasattr(self, "_symbol_prefetch_df"):
+                    self._symbol_prefetch_df = {}
+                self._symbol_prefetch_df[sym] = clean_df
             except Exception:
                 self._prefetch_df = None
             self._prefetched_features = None
@@ -515,37 +576,66 @@ class MLFilterAgent:
 
         try:
             df = pd.DataFrame(candles)
-            df["datetime"] = pd.to_datetime(df["datetime"])
-            df = df.set_index("datetime").sort_index()
-            self._prefetch_df = df
+            dt_col = "datetime" if "datetime" in df.columns else ("timestamp" if "timestamp" in df.columns else df.columns[0])
+            df["datetime"] = pd.to_datetime(df[dt_col])
+            clean_df = df.set_index("datetime").sort_index()
+            self._prefetch_df = clean_df
+            if not hasattr(self, "_symbol_prefetch_df"):
+                self._symbol_prefetch_df = {}
+            self._symbol_prefetch_df[sym] = clean_df
 
-            # Pre-extract with neutral direction  updated when signal fires
+            # Pre-extract with neutral direction — updated when signal fires
+            reg_info = (
+                getattr(self, "_symbol_regime_info", {}).get(sym)
+                or self._latest_regime_info
+            )
             feats = extract(
-                df=df,
+                df=clean_df,
                 conf=0.65,  # placeholder, updated in on_raw_signal
                 votes=2,
                 direction="BUY_CALL",
                 lookback=ML_LOOKBACK_CANDLES,
-                regime_info=self._latest_regime_info,
+                regime_info=reg_info,
             )
             self._prefetched_features = feats
+            if not hasattr(self, "_symbol_prefetched_features"):
+                self._symbol_prefetched_features = {}
+            self._symbol_prefetched_features[sym] = feats
+            self._prefetch_dir = "BUY_CALL"
+            if not hasattr(self, "_symbol_prefetch_dir"):
+                self._symbol_prefetch_dir = {}
+            self._symbol_prefetch_dir[sym] = "BUY_CALL"
         except Exception as e:
-            logger.debug(f"[{self.NAME}] prefetch error: {e}")
+            logger.debug(f"[{self.NAME}] prefetch error for {sym}: {e}")
             self._prefetched_features = None
+            if hasattr(self, "_symbol_prefetched_features"):
+                self._symbol_prefetched_features.pop(sym, None)
 
     async def on_regime_update(self, msg: Message) -> None:
-        """Keep df in sync from regime-passed candles too."""
+        """Keep df and regime info in sync from regime-passed candles too."""
         candles = msg.payload.get("candles", [])
+        sym = str(msg.payload.get("symbol") or os.getenv("COMMODITY", "SILVERM")).upper()
         if candles and len(candles) >= ML_LOOKBACK_CANDLES:
             try:
                 df = pd.DataFrame(candles)
                 df["datetime"] = pd.to_datetime(df["datetime"])
-                self._prefetch_df = df.set_index("datetime").sort_index()
+                clean_df = df.set_index("datetime").sort_index()
+                self._prefetch_df = clean_df
+                if not hasattr(self, "_symbol_prefetch_df"):
+                    self._symbol_prefetch_df = {}
+                self._symbol_prefetch_df[sym] = clean_df
+                if not hasattr(self, "_symbol_dfs"):
+                    self._symbol_dfs = {}
+                self._symbol_dfs[sym] = clean_df
             except Exception:
                 pass
-        # NEW: capture detailed_regime for ML feature engineering
+        # capture detailed_regime for ML feature engineering
         regime_details = msg.payload.get("regime_details", msg.payload.get("details", {}))
-        self._latest_regime_info = regime_details.get("detailed_regime", {})
+        reg_info = regime_details.get("detailed_regime", {})
+        self._latest_regime_info = reg_info
+        if not hasattr(self, "_symbol_regime_info"):
+            self._symbol_regime_info = {}
+        self._symbol_regime_info[sym] = reg_info
 
     async def on_system_reset(self, msg: Message) -> None:
         """CRITICAL FIX: Clear all cached state when bus resets (new backtest run)."""
@@ -555,6 +645,14 @@ class MLFilterAgent:
         self._prefetch_conf = 0.0
         self._prefetch_votes = 0
         self._prefetch_dir = ""
+        if hasattr(self, "_symbol_prefetched_features"):
+            self._symbol_prefetched_features.clear()
+        if hasattr(self, "_symbol_prefetch_df"):
+            self._symbol_prefetch_df.clear()
+        if hasattr(self, "_symbol_prefetch_dir"):
+            self._symbol_prefetch_dir.clear()
+        if hasattr(self, "_symbol_regime_info"):
+            self._symbol_regime_info.clear()
         self._latest_df = None
         self._latest_regime_info = {}
         self._latest_signal_context = {}
@@ -565,9 +663,17 @@ class MLFilterAgent:
 
     async def on_candles_update(self, msg: Message) -> None:
         candles = msg.payload.get("candles", [])
-        df = pd.DataFrame(candles)
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        self._latest_df = df.set_index("datetime").sort_index()
+        sym = str(msg.payload.get("symbol") or os.getenv("COMMODITY", "SILVERM")).upper()
+        if candles:
+            try:
+                df = pd.DataFrame(candles)
+                dt_col = "datetime" if "datetime" in df.columns else ("timestamp" if "timestamp" in df.columns else df.columns[0])
+                df["datetime"] = pd.to_datetime(df[dt_col])
+                clean_df = df.set_index("datetime").sort_index()
+                self._latest_df = clean_df
+                self._symbol_dfs[sym] = clean_df
+            except Exception:
+                pass
 
     async def on_new_session(self, msg: Message) -> None:
         ts_raw = msg.payload.get("timestamp")
@@ -739,7 +845,7 @@ class MLFilterAgent:
 
         anchor = context.get("hybrid_5m_anchor", {}) or {}
         anchor_direction = str(anchor.get("direction", "NONE") or "NONE")
-        anchor_votes = int(anchor.get("votes", 0) or 0)
+        anchor_votes = _extract_votes(anchor.get("votes", 0))
         anchor_ws = float(anchor.get("weighted_score", 0.0) or 0.0)
         anchor_aligned = (
             anchor_direction == direction
@@ -864,7 +970,7 @@ class MLFilterAgent:
         proven_structure = {"FVG", "ORB", "Ichimoku", "OIAnalysis", "CPR", "VolumeProfile"}
         anchor = context.get("hybrid_5m_anchor", {}) or {}
         anchor_direction = str(anchor.get("direction", "NONE") or "NONE")
-        anchor_votes = int(anchor.get("votes", 0) or 0)
+        anchor_votes = _extract_votes(anchor.get("votes", 0))
         anchor_ws = float(anchor.get("weighted_score", 0.0) or 0.0)
         anchor_aligned = (
             anchor_direction == direction
@@ -901,7 +1007,7 @@ class MLFilterAgent:
         data = msg.payload
         direction = str(data.get("direction", "NONE"))
         conf = float(data.get("confidence", 0.0))
-        votes = int(data.get("votes", 0))
+        votes = _extract_votes(data.get("votes", 0))
         market_ts = data.get("timestamp", "")
 
         sig_key = f"{market_ts}:{direction}"
@@ -927,14 +1033,54 @@ class MLFilterAgent:
         except Exception:
             ts = None
 
-        early_trigger = bool(context.get("early_trigger", False))
-        # Sub-threshold consensus (< 4 votes) is noise — drop immediately without publishing rejections
-        if votes < 4:
-            logger.debug(f"[{self.NAME}] Dropping sub-threshold signal (votes {votes} < 4)")
+        sym = str(data.get("symbol") or os.getenv("COMMODITY", "SILVERM")).upper()
+        from config.settings.modules.session_policy import (
+            get_session_policy,
+            is_macro_news_freeze_window,
+        )
+        session_policy = get_session_policy(ts, symbol=sym)
+
+        # 1. Macro economic news freeze check (EIA Crude/Gas, CPI, NFP, etc.)
+        is_frozen, freeze_reason = is_macro_news_freeze_window(ts, sym)
+        if is_frozen:
+            reason = f"ML gate: {freeze_reason}"
+            enriched = {
+                **data,
+                "ml_confidence": 0.0,
+                "ml_success_prob": 0.0,
+                "ml_rank_score": 0.0,
+                "ml_approved": False,
+                "ml_decision": "RULE_REJECT",
+                "ml_decision_reason": reason,
+                "rejection_reason": reason,
+            }
+            logger.warning(f"[{self.NAME}] [X] REJECTED | market_ts={market_ts} | {reason}")
+            log_pipeline_stage(
+                self.NAME,
+                "ml_filtering_ranking",
+                "filtered",
+                reason=reason,
+                market_ts=market_ts,
+                direction=direction,
+                confidence=f"{conf:.2f}",
+                votes=votes,
+            )
+            await self.bus.publish(Topic.SIGNAL_REJECTED, enriched, self.NAME)
             return
 
-        if votes < MIN_STRATEGY_VOTES and not self._allows_low_consensus_signal(data):
-            reason = f"ML gate: votes {votes} < required {MIN_STRATEGY_VOTES}"
+        from instruments.registry import get_instrument_strategy_config
+        inst_strat_cfg = get_instrument_strategy_config(sym)
+        min_required_votes = int(inst_strat_cfg.get("min_votes", session_policy.min_strategy_votes))
+        early_trigger = bool(context.get("early_trigger", False))
+        
+        # Sub-threshold consensus (< 4 votes, or < 3 if early trigger on alpha setup) is noise
+        cutoff_votes = 3 if early_trigger else min(4, min_required_votes)
+        if votes < cutoff_votes:
+            logger.debug(f"[{self.NAME}] Dropping sub-threshold signal for {sym} (votes {votes} < {cutoff_votes})")
+            return
+
+        if votes < min_required_votes and not self._allows_low_consensus_signal(data):
+            reason = f"ML gate [{session_policy.session_name} | {sym}]: votes {votes} < required {min_required_votes}"
             enriched = {
                 **data,
                 "ml_confidence": 0.0,
@@ -976,9 +1122,13 @@ class MLFilterAgent:
                 votes=votes,
                 direction=direction,
                 timestamp=ts,
+                symbol=sym,
             )
         except TypeError:
-            success_prob, decision_type = self._score(conf, votes, direction)
+            try:
+                success_prob, decision_type = self._score(conf, votes, direction, symbol=sym)
+            except TypeError:
+                success_prob, decision_type = self._score(conf, votes, direction)
         rank_score, rank_meta = self._rank_signal(
             data=data,
             success_prob=success_prob,
@@ -993,20 +1143,16 @@ class MLFilterAgent:
         setup_strength_for_reduced = float(data.get("setup_strength") or setup.get("setup_strength") or setup_ctx.get("setup_strength") or 0.5)
         regime_label = str((self._latest_regime_info or {}).get("label", "RANGING")).upper()
 
-        required_conf = ML_MIN_MODEL_CONFIDENCE
+        # Dynamic instrument-specific ML confidence threshold
+        required_conf = float(inst_strat_cfg.get("min_ml_confidence", session_policy.ml_min_confidence))
         if setup_type == "trend_pullback":
             if votes < 4:
                 required_conf = max(required_conf, ML_TREND_PULLBACK_MIN_CONFIDENCE)
         elif setup_type == "breakout":
             required_conf = max(required_conf, ML_BREAKOUT_MIN_CONFIDENCE)
 
-        # High-consensus exception: if 7+ strategies agree and rank is strong (>= 0.58),
-        # allow institutional breakout expansions (aligning with benchmark 2024-03-28 approval).
-        if votes >= 7 and rank_score >= 0.58 and required_conf > 0.32:
-            required_conf = 0.32
-
         if decision_type == "ML" and success_prob < required_conf:
-            reason = f"ML gate: model confidence {success_prob:.3f} < minimum required {required_conf:.2f} for {setup_type}"
+            reason = f"ML gate [{session_policy.session_name} | {sym}]: model confidence {success_prob:.3f} < minimum required {required_conf:.2f} for {setup_type}"
             setup_strength_for_reduced = float(data.get("setup_strength") or setup.get("setup_strength") or 0.5)
             # ── Last-chance: standalone reduced budget evaluator ──────────
             from agents_code.agent3_ml.reduced_budget_evaluator import (
@@ -1123,7 +1269,8 @@ class MLFilterAgent:
                 and signal_day is not None
                 and signal_day != self._live_parity_date
             )
-            if self.ensemble.is_trained and not allow_historical_fallback:
+            ens = self._get_ensemble_for_symbol(sym)
+            if ens.is_trained and not allow_historical_fallback:
                 reason = "ML fallback disabled while trained model is available"
                 enriched = {
                     **data,
@@ -1827,8 +1974,9 @@ class MLFilterAgent:
             if features is None:
                 return conf
 
-            if self.ensemble.is_trained:
-                ml_prob = self.ensemble.predict_proba(features)
+            ens = self._get_ensemble_for_symbol(symbol)
+            if ens.is_trained:
+                ml_prob = ens.predict_proba(features)
                 # Blend: 60% ML probability + 40% strategy confidence
                 # This prevents ML from being the sole arbiter when undertrained
                 return round(0.60 * ml_prob + 0.40 * conf, 4)
@@ -1844,32 +1992,38 @@ class MLFilterAgent:
         votes: int,
         direction: str,
         timestamp: pd.Timestamp | None = None,
+        symbol: str | None = None,
     ) -> tuple[float, str]:
+        sym = str(symbol or os.getenv("COMMODITY", "SILVERM")).upper()
+        ens = self._get_ensemble_for_symbol(sym)
+        target_df = None
+        if hasattr(self, "_symbol_dfs") and self._symbol_dfs.get(sym) is not None:
+            target_df = self._symbol_dfs.get(sym)
+        elif hasattr(self, "_symbol_prefetch_df") and self._symbol_prefetch_df.get(sym) is not None:
+            target_df = self._symbol_prefetch_df.get(sym)
+        else:
+            target_df = self._latest_df
+
         if (
-            not self.ensemble.is_trained
-            or self._latest_df is None
-            or len(self._latest_df) < ML_LOOKBACK_CANDLES
+            not ens.is_trained
+            or target_df is None
+            or len(target_df) < ML_LOOKBACK_CANDLES
         ):
             return conf, "FALLBACK"
-        # Use pre-fetched features if available  re-extract with correct params
         try:
-            df = self._prefetch_df
-            if df is None or len(df) < ML_LOOKBACK_CANDLES:
-                return conf, "FALLBACK"
-            # Re-extract with correct direction and confidence
-            # NEW: pass regime_info so ML model sees TRENDING/RANGING/HIGH_VOL
             features = self._features_for_signal(
                 conf=conf,
                 votes=votes,
                 direction=direction,
+                symbol=sym,
             )
             if features is None:
                 return conf, "FALLBACK"
 
-            return self.ensemble.predict_proba(features), "ML"
+            return ens.predict_proba(features), "ML"
 
         except Exception as e:
-            logger.debug(f"[{self.NAME}] score error: {e}")
+            logger.debug(f"[{self.NAME}] score error for {sym}: {e}")
             return conf, "FALLBACK"
 
     def _features_for_signal(
@@ -1878,44 +2032,72 @@ class MLFilterAgent:
         conf: float,
         votes: int,
         direction: str,
+        symbol: str | None = None,
     ) -> Union[dict, None]:
-        if self._prefetched_features and self._prefetch_df is not None:
-            latest_prefetch_ts = self._prefetch_df.index[-1]
-            latest_signal_ts = self._latest_df.index[-1]
+        sym = str(symbol or os.getenv("COMMODITY", "SILVERM")).upper()
+        target_df = None
+        if hasattr(self, "_symbol_dfs") and self._symbol_dfs.get(sym) is not None:
+            target_df = self._symbol_dfs.get(sym)
+        elif hasattr(self, "_symbol_prefetch_df") and self._symbol_prefetch_df.get(sym) is not None:
+            target_df = self._symbol_prefetch_df.get(sym)
+        else:
+            target_df = self._latest_df
+
+        if target_df is None or len(target_df) < ML_LOOKBACK_CANDLES:
+            return None
+
+        reg_info = (
+            getattr(self, "_symbol_regime_info", {}).get(sym)
+            or self._latest_regime_info
+            or {}
+        )
+        sym_prefetch_df = getattr(self, "_symbol_prefetch_df", {}).get(sym)
+        if sym_prefetch_df is None:
+            sym_prefetch_df = self._prefetch_df
+
+        sym_prefetched_feats = getattr(self, "_symbol_prefetched_features", {}).get(sym)
+        if sym_prefetched_feats is None:
+            sym_prefetched_feats = self._prefetched_features
+
+        sym_prefetch_dir = getattr(self, "_symbol_prefetch_dir", {}).get(sym)
+        if sym_prefetch_dir is None:
+            sym_prefetch_dir = self._prefetch_dir
+
+        if sym_prefetched_feats and sym_prefetch_df is not None:
+            latest_prefetch_ts = sym_prefetch_df.index[-1]
+            latest_signal_ts = target_df.index[-1]
             if latest_prefetch_ts == latest_signal_ts:
-                # CRITICAL FIX: Verify prefetched direction matches signal direction
-                prefetched_is_call = self._prefetch_dir == "BUY_CALL"
+                # Verify prefetched direction matches signal direction
+                prefetched_is_call = sym_prefetch_dir == "BUY_CALL"
                 signal_is_call = direction == "BUY_CALL"
                 if prefetched_is_call != signal_is_call:
-                    # Direction mismatch - re-extract with correct direction
-                    logger.debug(f"[{self.NAME}] Direction mismatch (prefetch={self._prefetch_dir}, signal={direction}), re-extracting features")
+                    logger.debug(f"[{self.NAME}] Direction mismatch for {sym} (prefetch={sym_prefetch_dir}, signal={direction}), re-extracting features")
                     return extract(
-                        df=self._latest_df,
+                        df=target_df,
                         conf=conf,
                         votes=votes,
                         direction=direction,
                         lookback=ML_LOOKBACK_CANDLES,
-                        regime_info=self._latest_regime_info,
+                        regime_info=reg_info,
                         signal_context=self._latest_signal_context,
                         strategies_fired=self._latest_strategies,
                     )
-                features = dict(self._prefetched_features)
+                features = dict(sym_prefetched_feats)
                 features["strategy_conf"] = float(conf)
                 features["votes"] = int(votes)
                 features["is_call"] = int(direction == "BUY_CALL")
                 
-                ri = self._latest_regime_info or {}
-                lbl = ri.get("label", "RANGING")
+                lbl = reg_info.get("label", "RANGING")
                 features["regime_label_enc"] = 1.0 if lbl == "TRENDING" else (2.0 if lbl == "HIGH_VOLATILITY" else 0.0)
-                features["regime_confidence"] = float(ri.get("confidence", 0.5))
-                features["regime_atr_ratio"] = float(ri.get("atr_ratio", 1.0))
+                features["regime_confidence"] = float(reg_info.get("confidence", 0.5))
+                features["regime_atr_ratio"] = float(reg_info.get("atr_ratio", 1.0))
                 context_features = extract(
-                    df=self._prefetch_df,
+                    df=sym_prefetch_df,
                     conf=conf,
                     votes=votes,
                     direction=direction,
                     lookback=ML_LOOKBACK_CANDLES,
-                    regime_info=self._latest_regime_info,
+                    regime_info=reg_info,
                     signal_context=self._latest_signal_context,
                     strategies_fired=self._latest_strategies,
                 ) or {}
@@ -1939,24 +2121,33 @@ class MLFilterAgent:
                 return features
 
         return extract(
-            df=self._latest_df,
+            df=target_df,
             conf=conf,
             votes=votes,
             direction=direction,
             lookback=ML_LOOKBACK_CANDLES,
-            regime_info=self._latest_regime_info,  # NEW
+            regime_info=reg_info,
             signal_context=self._latest_signal_context,
             strategies_fired=self._latest_strategies,
         )
 
 
 
-    def _decision_threshold(self, decision_type: str) -> float:
+    def _decision_threshold(self, decision_type: str, symbol: str | None = None) -> float:
         penalty = self._health_threshold_penalty()
-        if decision_type == "ML" and self.ensemble.is_trained:
-            base = ML_THRESHOLD_OVERRIDE if ML_THRESHOLD_OVERRIDE > 0 else self.ensemble.decision_threshold
+        ens = self._get_ensemble_for_symbol(symbol)
+        inst_min_conf = ML_MIN_CONFIDENCE
+        if symbol:
+            try:
+                from instruments.registry import get_instrument_strategy_config
+                inst_cfg = get_instrument_strategy_config(symbol)
+                inst_min_conf = float(inst_cfg.get("min_ml_confidence", ML_MIN_CONFIDENCE))
+            except Exception:
+                pass
+        if decision_type == "ML" and ens.is_trained:
+            base = ML_THRESHOLD_OVERRIDE if ML_THRESHOLD_OVERRIDE > 0 else ens.decision_threshold
             return min(0.95, base + penalty)
-        return min(0.95, ML_MIN_CONFIDENCE + penalty)
+        return min(0.95, inst_min_conf + penalty)
 
     def _rank_signal(
         self,
@@ -2193,7 +2384,7 @@ class MLFilterAgent:
     @staticmethod
     def _passes_fallback_gate(data: dict, fallback_conf: float) -> tuple[bool, str]:
         regime = str(data.get("regime", "TRENDING")).upper()
-        votes = int(data.get("votes", 0))
+        votes = _extract_votes(data.get("votes", 0))
         setup = (((data.get("metadata") or {}).get("_context") or {}).get("setup") or {})
         setup_type = str(setup.get("setup_type", "unknown") or "unknown").lower()
         setup_strength = float(setup.get("setup_strength", 0.0) or 0.0)
@@ -2592,27 +2783,44 @@ class MLFilterAgent:
             "Entering FALLBACK mode."
         )
 
+    def _get_ensemble_for_symbol(self, symbol: str | None = None) -> SignalForgeEnsemble:
+        sym = (symbol or os.getenv("COMMODITY", "SILVERM")).strip().upper()
+        if sym in self._ensembles and self._ensembles[sym].is_trained:
+            return self._ensembles[sym]
+
+        ens = SignalForgeEnsemble()
+        for path, timeframe, is_fallback in self._candidate_model_paths(LIVE_TIMEFRAME, symbol=sym):
+            if path.exists():
+                if ens.load(path):
+                    logger.info(f"[{self.NAME}] Loaded model for {sym} from {path}")
+                    self._ensembles[sym] = ens
+                    return ens
+        if self.ensemble.is_trained:
+            self._ensembles[sym] = self.ensemble
+            return self.ensemble
+        return ens
+
     def reload_model(self) -> None:
         self.ensemble = SignalForgeEnsemble()
+        self._ensembles.clear()
         self._load_model()
+        for sym in ("SILVERM", "GOLDM", "CRUDEOILM", "NATGASM"):
+            self._ensemble_for_symbol(sym)
         if self.ensemble.is_trained:
             self._evaluate_model_health()
             logger.info(
                 f"[{self.NAME}] Model reloaded | "
                 f"models={list(self.ensemble.models.keys())} | "
-                f"features={len(self.ensemble.feature_cols)}"
+                f"features={len(self.ensemble.feature_cols)} | "
+                f"lanes={list(self._ensembles.keys())}"
             )
         else:
             logger.warning(f"[{self.NAME}] reload_model: no compatible model for {LIVE_TIMEFRAME}")
 
     async def on_model_retrained(self, msg: Message) -> None:
         model_path = msg.payload.get("model_path")
-        if model_path and Path(model_path) != self._model_path:
-            logger.info(
-                f"[{self.NAME}] MODEL_RETRAINED ignored for different model: {model_path}"
-            )
-            return
-        logger.info(f"[{self.NAME}] MODEL_RETRAINED received  reloading model")
+        retrained_symbol = msg.payload.get("symbol", "ALL")
+        logger.info(f"[{self.NAME}] MODEL_RETRAINED received | symbol={retrained_symbol} path={model_path} — hot-reloading ensembles")
         self.reload_model()
 
     async def _model_file_watcher(self) -> None:

@@ -31,14 +31,14 @@ class OpeningRangeBreakoutStrategy(BaseCommodityStrategy):
     def __init__(self, parameters: Optional[Dict[str, Any]] = None):
         default_params = {
             "orb_duration_minutes": 30,         # 09:00 to 09:30 range
-            "breakout_buffer_atr_mult": 0.15,   # Buffer above/below ORB
-            "min_range_atr_mult": 0.5,          # Avoid dead, noisy ranges
-            "max_range_atr_mult": 3.0,          # Avoid massive exhaustion ranges
-            "volume_multiplier": 1.25,          # Breakout bar volume vs 20 SMA
+            "breakout_buffer_atr_mult": 0.10,   # Buffer above/below ORB
+            "min_range_atr_mult": 0.4,          # Avoid dead, noisy ranges
+            "max_range_atr_mult": 3.5,          # Avoid massive exhaustion ranges
+            "volume_multiplier": 1.15,          # Breakout bar volume vs 20 SMA
             "risk_reward_ratio": 1.8,
             "sl_range_ratio": 0.5,              # SL placed at midpoint of ORB or ATR
             "trailing_stop_atr_mult": 1.2,
-            "trading_window_hours": 4.0,        # Entries only within 4h after ORB
+            "trading_window_hours": 8.5,        # Entries permitted through 18:00 IST
             "max_holding_bars": 90,
         }
         super().__init__(

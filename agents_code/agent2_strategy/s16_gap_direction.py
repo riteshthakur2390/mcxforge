@@ -86,16 +86,23 @@ from core.models import Direction
 
 #  Parameters 
 try:
-    from config.settings import GAP_BIAS_THRESHOLD_PCT
-    GAP_MIN_PCT = float(GAP_BIAS_THRESHOLD_PCT)
+    from config.settings.strategy import (
+        S16_GAP_STRONG_PCT, S16_GAP_VOL_MULT, S16_GAP_RSI_BULL,
+        S16_GAP_RSI_BEAR, S16_GAP_WINDOW_END_H
+    )
+    GAP_STRONG_PCT = float(S16_GAP_STRONG_PCT)
+    GAP_VOL_MULT = float(S16_GAP_VOL_MULT)
+    GAP_RSI_BULL = float(S16_GAP_RSI_BULL)
+    GAP_RSI_BEAR = float(S16_GAP_RSI_BEAR)
+    GAP_WINDOW_END_H = int(S16_GAP_WINDOW_END_H)
 except (ImportError, AttributeError):
-    GAP_MIN_PCT = 0.30
+    GAP_STRONG_PCT = 0.40
+    GAP_VOL_MULT = 1.10
+    GAP_RSI_BULL = 53
+    GAP_RSI_BEAR = 47
+    GAP_WINDOW_END_H = 14
 
-GAP_STRONG_PCT   = GAP_MIN_PCT * 2.0   # strong gap = 2 minimum
-GAP_VOL_MULT     = 1.20                # meaningful opening participation, not ordinary noise
-GAP_RSI_BULL     = 55                  # stronger momentum floor for CALL
-GAP_RSI_BEAR     = 45                  # stronger momentum ceiling for PUT
-GAP_WINDOW_END_H = 11                  # allow the documented first-session continuation window
+GAP_MIN_PCT = 0.20
 
 
 class GapDirectionStrategy:

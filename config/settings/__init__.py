@@ -14,3 +14,4 @@ from .strategy_runner_thresholds import *
 from .strategy import *
 from .modules.utils_thresholds import *
 from .modules.system_thresholds import *
+from .modules.session_policy import *

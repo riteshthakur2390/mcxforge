@@ -48,10 +48,11 @@ USAGE:
 
 from __future__ import annotations
 
+import os
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -76,7 +77,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-MAX_OPEN_POSITIONS     = 1      # never hold more than 1 position simultaneously
+MAX_OPEN_POSITIONS     = int(os.getenv("MAX_OPEN_POSITIONS", "4"))  # up to 1 per commodity lane across 4 commodities
 ORDER_RETRY_MAX        = 2      # max retries on failed limit order
 ORDER_RETRY_SLIP_PCT   = 0.10   # add 0.10% to price on each retry
 ORDER_FILL_TIMEOUT_S   = 12     # seconds to wait for fill confirmation
@@ -185,7 +186,20 @@ class OrderManager:
 
     # ── OPEN POSITIONS GUARD ──────────────────────────────────────────────────
 
-    def can_open_position(self) -> tuple[bool, str]:
+    @staticmethod
+    def _canonical_sym(val: Any) -> str:
+        s = str(val or "").upper().strip()
+        if "SILVERM" in s or "SILVERMIC" in s or "SILVER" in s:
+            return "SILVERM"
+        if "GOLDM" in s or "GOLD" in s:
+            return "GOLDM"
+        if "CRUDEOILM" in s or "CRUDE" in s:
+            return "CRUDEOILM"
+        if "NATGASM" in s or "NATURALGAS" in s or "NATGAS" in s:
+            return "NATGASM"
+        return s
+
+    def can_open_position(self, symbol: Optional[str] = None) -> tuple[bool, str]:
         """
         Check if a new position can be opened.
         Returns (allowed, reason).
@@ -193,6 +207,12 @@ class OrderManager:
         now_str = datetime.now(IST).strftime("%H:%M")
         if CAS_START_TIME <= now_str <= CAS_END_TIME:
             return False, f"SEBI Closing Auction Session (CAS {CAS_START_TIME}-{CAS_END_TIME}) active — entries prohibited"
+
+        if symbol:
+            target_sym = self._canonical_sym(symbol)
+            for open_sym in self._open_positions:
+                if self._canonical_sym(open_sym) == target_sym:
+                    return False, f"Already holding active position in {target_sym}"
 
         n = len(self._open_positions)
         if n >= MAX_OPEN_POSITIONS:

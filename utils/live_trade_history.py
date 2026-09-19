@@ -11,6 +11,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 import os
+import hashlib
+import uuid
+import re
 
 import pytz
 
@@ -24,6 +27,23 @@ IST = pytz.timezone("Asia/Kolkata")
 LIVE_HISTORY_CSV = Path(JOURNAL_DIR) / "live_trade_history.csv"
 OBSERVE_HISTORY_CSV = Path(JOURNAL_DIR) / "observe_trade_history.csv"
 HISTORY_CSV = LIVE_HISTORY_CSV
+
+
+def make_short_trade_id(symbol: str = "", direction: str = "", raw_id: str = "", entry_time: object = None) -> str:
+    """Generate concise, readable trade ID: {SYMBOL}_{BIAS}_{UNIQID} e.g. SILVERM_PUT_9B4E2D"""
+    sym = (symbol or "SILVERM").split("-")[0].replace(" ", "").upper()
+    dir_str = str(direction or "").upper()
+    bias = "PUT" if ("PUT" in dir_str or "PE" in dir_str) else "CALL"
+
+    if raw_id and "|" in raw_id:
+        uniq = hashlib.md5(raw_id.encode("utf-8")).hexdigest()[:6].upper()
+    elif raw_id and len(raw_id) >= 4 and not raw_id.startswith("SF-"):
+        cleaned = re.sub(r'[^A-Za-z0-9]', '', raw_id)
+        uniq = cleaned[-6:].upper() if len(cleaned) >= 6 else cleaned.upper()
+    else:
+        uniq = uuid.uuid4().hex[:6].upper()
+
+    return f"{sym}_{bias}_{uniq}"
 
 FIELDNAMES = [
     "trade_id",
@@ -275,13 +295,30 @@ class LiveTradeHistory:
             "notes": spec.get("notes", ""),
         }
 
-    def rows(self, limit: int | None = None, include_backtest: bool = False) -> list[dict]:
+    def rows(self, limit: int | None = None, include_backtest: bool = False, symbol: str | None = None) -> list[dict]:
         if not self.path.exists():
             return []
         rows = self._read_rows()
         rows = [r for r in rows if self._is_valid_history_row(r)]
         if not include_backtest:
             rows = [r for r in rows if str(r.get("mode", "")).upper() != "BACKTEST"]
+        if symbol and symbol.strip().upper() not in ("", "ALL"):
+            sym_clean = symbol.strip().upper()
+            # Handle aliases (e.g. CRUDEOIL / CRUDEOILM, NATGAS / NATURALGAS / NATGASM)
+            prefixes = [sym_clean]
+            if "SILVER" in sym_clean:
+                prefixes = ["SILVERM", "SILVERMIC", "SILVER"]
+            elif "GOLD" in sym_clean:
+                prefixes = ["GOLDM", "GOLD"]
+            elif "CRUDE" in sym_clean:
+                prefixes = ["CRUDEOILM", "CRUDEOIL", "CRUDE"]
+            elif "NAT" in sym_clean:
+                prefixes = ["NATGASM", "NATGASMINI", "NATGAS", "NATURALGAS"]
+
+            rows = [
+                r for r in rows
+                if any(p in str(r.get("symbol", "")).upper() or p in str(r.get("option_symbol", "")).upper() for p in prefixes)
+            ]
         deduped = _deduplicate_rows(rows)
         deduped.sort(key=lambda r: (r.get("entry_time") or r.get("date") or "", r.get("trade_id") or ""), reverse=True)
         return deduped[:limit] if limit else deduped
@@ -294,8 +331,8 @@ class LiveTradeHistory:
             return False
         return _to_float(row.get("entry_premium"), 0.0) > 0
 
-    def summary(self) -> dict:
-        rows = self.rows()
+    def summary(self, symbol: str | None = None) -> dict:
+        rows = self.rows(symbol=symbol)
         today = date.today().isoformat()
         month = today[:7]
         return {
@@ -303,6 +340,18 @@ class LiveTradeHistory:
             "month": self._summarize([r for r in rows if str(r.get("date", "")).startswith(month)]),
             "all": self._summarize(rows),
         }
+
+    def commodity_summaries(self) -> dict:
+        """Returns isolated summaries and rows for each supported commodity."""
+        commodities = ["ALL", "SILVERM", "GOLDM", "CRUDEOILM", "NATGASM"]
+        res = {}
+        for comm in commodities:
+            s_arg = None if comm == "ALL" else comm
+            res[comm] = {
+                "summary": self.summary(symbol=s_arg),
+                "trades": self.rows(limit=50, symbol=s_arg),
+            }
+        return res
 
     def _row_from_trade(self, entry: dict, exit_payload: dict) -> dict:
         entry_time = entry.get("entry_time") or entry.get("timestamp")
@@ -334,8 +383,16 @@ class LiveTradeHistory:
                 str(entry.get("direction") or exit_payload.get("direction") or ""),
             ])
 
+        existing_tid = str(entry.get("trade_id") or "").strip()
+        sym_hint = entry.get("symbol") or exit_payload.get("symbol") or os.getenv("COMMODITY", "SILVERM")
+        dir_hint = entry.get("direction") or exit_payload.get("direction", "")
+        if existing_tid and "|" not in existing_tid and not existing_tid.startswith("SF-"):
+            trade_id = existing_tid
+        else:
+            trade_id = make_short_trade_id(sym_hint, dir_hint, raw_id=existing_tid or signal_id, entry_time=entry_time)
+
         return {
-            "trade_id": entry.get("trade_id") or signal_id or f"SF-{datetime.now(IST).strftime('%Y%m%d%H%M%S')}",
+            "trade_id": trade_id,
             "signal_id": signal_id,
             "date": entry.get("date") or _date_from_ts(entry_time or exit_time),
             "entry_time": _time_value(entry_time),

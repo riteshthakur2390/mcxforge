@@ -311,6 +311,72 @@ NATURALGAS_CONFIG = InstrumentConfig(
     reason                    = "mcx_naturalgas",
 )
 
+GOLDM_CONFIG = InstrumentConfig(
+    name                      = "GOLDM",
+    exchange                  = "MCX",
+    segment                   = "MCX_COMM",
+    underlying                = "GOLDM",
+    symbol_prefix             = "GOLDM",
+    lot_size                  = 10,            # 100g contract (quoted per 10g -> multiplier 10)
+    tick_size                 = 1.0,           # ₹1.00
+    tick_value                = 10.0,          # ₹10.00 per ₹1 move in quote
+    round_number_step         = 100.0,
+    strike_step               = 100,
+    margin_pct_estimate       = 0.10,
+    tender_days_before_expiry = 5,
+    contract_cycle_months     = [2, 4, 6, 8, 10, 12],
+    session_start             = "09:00",
+    session_end               = "23:30",
+    dhan_segment              = "MCX_COMM",
+    upstox_key                = "MCX_FO|GOLDM",
+    kite_symbol               = "MCX:GOLDM",
+    reason                    = "mcx_gold_mini",
+)
+
+CRUDEOILM_CONFIG = InstrumentConfig(
+    name                      = "CRUDEOILM",
+    exchange                  = "MCX",
+    segment                   = "MCX_COMM",
+    underlying                = "CRUDEOILM",
+    symbol_prefix             = "CRUDEOILM",
+    lot_size                  = 10,            # 10 barrels mini
+    tick_size                 = 1.0,
+    tick_value                = 10.0,          # ₹10 per ₹1 move
+    round_number_step         = 50.0,
+    strike_step               = 50,
+    margin_pct_estimate       = 0.25,
+    tender_days_before_expiry = 0,             # Cash settled
+    contract_cycle_months     = list(range(1, 13)),
+    session_start             = "09:00",
+    session_end               = "23:30",
+    dhan_segment              = "MCX_COMM",
+    upstox_key                = "MCX_FO|CRUDEOILM",
+    kite_symbol               = "MCX:CRUDEOILM",
+    reason                    = "mcx_crudeoil_mini",
+)
+
+NATGASM_CONFIG = InstrumentConfig(
+    name                      = "NATGASM",
+    exchange                  = "MCX",
+    segment                   = "MCX_COMM",
+    underlying                = "NATGASM",
+    symbol_prefix             = "NATGASM",
+    lot_size                  = 250,           # 250 mmBtu mini
+    tick_size                 = 0.10,
+    tick_value                = 25.0,          # ₹25 per 0.10 move
+    round_number_step         = 5.0,
+    strike_step               = 5,
+    margin_pct_estimate       = 0.30,
+    tender_days_before_expiry = 0,             # Cash settled
+    contract_cycle_months     = list(range(1, 13)),
+    session_start             = "09:00",
+    session_end               = "23:30",
+    dhan_segment              = "MCX_COMM",
+    upstox_key                = "MCX_FO|NATGASM",
+    kite_symbol               = "MCX:NATGASM",
+    reason                    = "mcx_naturalgas_mini",
+)
+
 # Legacy fallbacks for SignalForge compatibility
 NIFTY_CONFIG = InstrumentConfig(
     name                      = "NIFTY",
@@ -356,12 +422,14 @@ INSTRUMENT_REGISTRY = {
     "SILVERMIC":  SILVERMIC_CONFIG,
     "SILVER":     SILVERM_CONFIG,
     "GOLD":       GOLD_CONFIG,
-    "GOLDM":      GOLD_CONFIG,
+    "GOLDM":      GOLDM_CONFIG,
     "CRUDEOIL":   CRUDEOIL_CONFIG,
-    "CRUDEOILM":  CRUDEOIL_CONFIG,
-    "CRUDE":      CRUDEOIL_CONFIG,
+    "CRUDEOILM":  CRUDEOILM_CONFIG,
+    "CRUDE":      CRUDEOILM_CONFIG,
     "NATURALGAS": NATURALGAS_CONFIG,
-    "NATGAS":     NATURALGAS_CONFIG,
+    "NATGAS":     NATGASM_CONFIG,
+    "NATGASM":    NATGASM_CONFIG,
+    "NATGASMINI": NATGASM_CONFIG,
     "NIFTY":      NIFTY_CONFIG,
     "SENSEX":     SENSEX_CONFIG,
 }

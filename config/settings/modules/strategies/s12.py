@@ -2,9 +2,9 @@ import os
 from config.settings.utils import *
 
 S12_EMA_PERIOD = int(os.getenv("S12_EMA_PERIOD", "20"))
-S12_VWAP_BAND = float(os.getenv("S12_VWAP_BAND", "0.10"))
-S12_LEVEL_BAND = float(os.getenv("S12_LEVEL_BAND", "0.20"))
-S12_VOL_MULT = float(os.getenv("S12_VOL_MULT", "1.4"))
+S12_VWAP_BAND = float(os.getenv("S12_VWAP_BAND", "0.20"))
+S12_LEVEL_BAND = float(os.getenv("S12_LEVEL_BAND", "0.35"))
+S12_VOL_MULT = float(os.getenv("S12_VOL_MULT", "1.15"))
 S12_SWING_LOOKBACK = int(os.getenv("S12_SWING_LOOKBACK", "20"))
 S12_ENGULF_FACTOR = float(os.getenv("S12_ENGULF_FACTOR", "1.02"))
 S12_VOL_MA_PERIOD = int(os.getenv("S12_VOL_MA_PERIOD", "20"))

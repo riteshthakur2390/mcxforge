@@ -1,227 +1,227 @@
 {
-  "date": "2026-09-16",
-  "timestamp": "2026-09-16T11:50:53.539437+05:30",
-  "scans": 29,
+  "date": "2026-09-19",
+  "timestamp": "2026-09-19T09:52:51.075687+05:30",
+  "scans": 0,
   "strategies": {
     "TrendFollowing": {
-      "evaluated": 29,
-      "voted": 14,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "OpeningRangeBreakout": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "VWAPMeanReversion": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "VolatilityBreakout": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "DonchianBreakout": {
-      "evaluated": 29,
-      "voted": 1,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "BBMeanReversion": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "MACrossover": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "RSIDivergence": {
-      "evaluated": 29,
-      "voted": 1,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "MomentumVolumeBreakout": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "GoldSilverPairs": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "OrderFlowDelta": {
-      "evaluated": 29,
-      "voted": 8,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "TimeOfDaySeasonality": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "RSI2MeanReversion": {
-      "evaluated": 29,
-      "voted": 6,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "CalendarSeasonality": {
-      "evaluated": 29,
-      "voted": 28,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "TermStructure": {
-      "evaluated": 29,
-      "voted": 6,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "SuperTrend+RSI": {
-      "evaluated": 29,
-      "voted": 25,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "VWAP+EMA": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "ADX+PSAR": {
-      "evaluated": 29,
-      "voted": 20,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "FVG": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "UTBot": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "CPR": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "Ichimoku": {
-      "evaluated": 29,
-      "voted": 28,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "VolumeProfile": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "LiqSweep": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "PriceAction": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "OIAnalysis": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "AMD": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "GapDirection": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "SMC": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "GapMomentum": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "ADXRising": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "RangeSpread": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "SqueezeMomentum": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "StochRSI": {
-      "evaluated": 29,
-      "voted": 3,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "EMASlope": {
-      "evaluated": 29,
-      "voted": 10,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "HeikinAshi": {
-      "evaluated": 29,
+      "evaluated": 0,
       "voted": 0,
       "skipped": 0,
       "errors": 0
     },
     "ElliottWave": {
-      "evaluated": 29,
-      "voted": 9,
+      "evaluated": 0,
+      "voted": 0,
       "skipped": 0,
       "errors": 0
     }

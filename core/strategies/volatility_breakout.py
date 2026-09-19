@@ -33,11 +33,11 @@ class VolatilityBreakoutStrategy(BaseCommodityStrategy):
             "bb_period": 20,
             "bb_std": 2.0,
             "keltner_period": 20,
-            "keltner_mult": 1.5,
-            "compression_lookback": 15,          # Lookback to verify compression occurred
-            "expansion_bar_mult": 1.6,           # Bar range expansion vs recent ATR
-            "volume_expansion_mult": 1.3,        # Breakout volume vs 20 SMA
-            "abnormal_vol_max_atr_ratio": 2.8,   # Abort if ATR expansion is abnormally wild
+            "keltner_mult": 1.85,                # Squeeze calibration for commodity volatility
+            "compression_lookback": 20,          # Lookback to verify compression occurred
+            "expansion_bar_mult": 1.25,          # Bar range expansion vs recent ATR
+            "volume_expansion_mult": 1.15,       # Breakout volume vs 20 SMA
+            "abnormal_vol_max_atr_ratio": 3.2,   # Abort if ATR expansion is abnormally wild
             "atr_sl_multiplier": 1.6,
             "risk_reward_ratio": 2.0,
             "trailing_stop_atr_mult": 1.4,

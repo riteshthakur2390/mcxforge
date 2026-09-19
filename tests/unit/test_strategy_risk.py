@@ -11,6 +11,7 @@ from agents_code.agent2_strategy.runner import StrategyAgent
 from agents_code.agent10_risk.guard import RiskGuardAgent
 from core.bus import get_bus, reset_bus, Topic
 from core.models import RawSignal, Direction
+from config.settings import PAPER_TRADING_CAPITAL, MAX_DAILY_LOSS_PCT
 
 
 @pytest.fixture(autouse=True)
@@ -70,8 +71,9 @@ def test_risk_guard_halts_after_daily_loss_breach():
             statuses.append(msg.payload)
 
         bus.subscribe(Topic.SYSTEM_STATUS, capture)
+        loss_amount = float(PAPER_TRADING_CAPITAL * (MAX_DAILY_LOSS_PCT + 5) / 100.0)
         await bus.publish(Topic.POSITION_CLOSED, {
-            "realized_pnl": -35000.0,
+            "realized_pnl": -loss_amount,
             "timestamp": datetime.now().isoformat(),
         }, "test")
 

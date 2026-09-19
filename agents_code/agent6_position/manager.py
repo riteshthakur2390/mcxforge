@@ -24,7 +24,7 @@ WHY TIERED TSL:
 """
 import asyncio
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, Any
 import pytz
 
 import sys, os
@@ -57,6 +57,7 @@ from utils.partial_exit_executor import PartialExitExecutor
 from utils.profit_ladder import ProfitLadder
 from loguru import logger
 from utils.spot_based_sl import get_spot_sl_detector
+from instruments.registry import get_instrument_strategy_config, normalize_symbol
 IST = pytz.timezone("Asia/Kolkata")
 
 
@@ -113,6 +114,57 @@ def _tiered_tsl_pct(pnl_pct: float, current_adx: float) -> float:
 
     return trail
 
+class CommodityPositionSlot:
+    """Isolated state container for a single commodity lane's active position."""
+    def __init__(
+        self,
+        symbol: str,
+        pos: Position,
+        quantity: int,
+        initial_quantity: int,
+        entry_nifty_ltp: float = 0.0,
+        ladder: Optional[ProfitLadder] = None,
+        spot_sl_level: float = 0.0,
+        spot_sl_source: str = "",
+        spot_sl_enabled: bool = True,
+    ) -> None:
+        self.symbol = symbol
+        self.pos = pos
+        self.quantity = quantity
+        self.initial_quantity = initial_quantity
+        self.entry_nifty_ltp = entry_nifty_ltp
+        self.ladder = ladder
+        self.spot_sl_level = spot_sl_level
+        self.spot_sl_source = spot_sl_source
+        self.spot_sl_enabled = spot_sl_enabled
+        self.partial_realized_pnl: float = 0.0
+        self.partial_transaction_costs: float = 0.0
+        self.partial_quantity_closed: int = 0
+        self.candles_held: int = 0
+        self.peak_pnl: float = 0.0
+        self.tsl_active: bool = False
+        self.tsl_floor: float = pos.sl_premium if pos else 0.0
+        self.last_momentum: float = 1.0
+        self.last_adx: float = 20.0
+        self.nifty_closes: list[float] = []
+        self.premium_closes: list[float] = []
+        self.df_buffer: list = []
+        self.intrabar_hit_counts: dict[str, int] = {}
+
+    def to_dict(self) -> dict:
+        if not self.pos:
+            return {}
+        d = self.pos.to_dict()
+        d["symbol"] = self.symbol
+        d["quantity"] = self.quantity
+        d["initial_quantity"] = self.initial_quantity
+        d["partial_quantity_closed"] = self.partial_quantity_closed
+        d["partial_realized_pnl"] = round(self.partial_realized_pnl, 2)
+        d["partial_transaction_costs"] = round(self.partial_transaction_costs, 2)
+        d["profit_ladder"] = self.ladder.get_stats() if self.ladder else {}
+        return d
+
+
 class PositionManagerAgent:
     NAME = "PositionManagerAgent"
     def __init__(self, data_agent=None) -> None:
@@ -122,6 +174,8 @@ class PositionManagerAgent:
         self.order_manager = get_order_manager(self.broker)
         self.partial_exit_executor = PartialExitExecutor(self.broker)
         self.__pos: Optional[Position] = None
+        self._slots: dict[str, CommodityPositionSlot] = {}
+        self._active_sym: str = ""
         self._entry_nifty_ltp, self._quantity = 0.0, 0
         self._initial_quantity = 0
         self._partial_realized_pnl = 0.0
@@ -130,31 +184,160 @@ class PositionManagerAgent:
         self._ladder: Optional[ProfitLadder] = None
         self._prev_pnl = -999.0
 
-    @property
-    def _pos(self) -> Optional[Position]:
-        return self.__pos
-
-    @_pos.setter
-    def _pos(self, val: Optional[Position]) -> None:
-        self.__pos = val
-
         # Momentum / stale tracking
         self._candles_held:   int   = 0
         self._peak_pnl:       float = 0.0
         self._tsl_active:     bool  = False
-        self._tsl_floor:      float = 0.0  # premium level TSL won't let fall below
-        self._last_momentum:  float = 1.0  # last momentum score from regime
+        self._tsl_floor:      float = 0.0
+        self._last_momentum:  float = 1.0
         self._last_adx:       float = 20.0
         self._nifty_closes:   list[float] = []
         self._premium_closes: list[float] = []
 
         # Spot-based structural SL
-        self._spot_sl_level: float = 0.0  # NIFTY spot invalidation level
-        self._spot_sl_source: str = ""  # where SL came from (SWING_LOW etc)
-        self._spot_sl_enabled: bool = True  # use structural SL if level set
-        self._last_nifty_spot: float = 0.0  # last known NIFTY spot
-        self._df_buffer: list = []  # rolling 5-min OHLCV for SL detection
+        self._spot_sl_level: float = 0.0
+        self._spot_sl_source: str = ""
+        self._spot_sl_enabled: bool = True
+        self._last_nifty_spot: float = 0.0
+        self._df_buffer: list = []
         self._intrabar_hit_counts: dict[str, int] = {}
+
+    @staticmethod
+    def _canonical_sym(val: Any) -> str:
+        s = str(val or "").upper().strip()
+        if "SILVERM" in s or "SILVERMIC" in s or "SILVER" in s:
+            return "SILVERM"
+        if "GOLDM" in s or "GOLD" in s:
+            return "GOLDM"
+        if "CRUDEOILM" in s or "CRUDE" in s:
+            return "CRUDEOILM"
+        if "NATGASM" in s or "NATURALGAS" in s or "NATGAS" in s:
+            return "NATGASM"
+        return s or os.getenv("INSTRUMENT", "SILVERM").upper()
+
+    def _resolve_symbol_from_payload(self, payload: dict) -> str:
+        if not isinstance(payload, dict):
+            return self._canonical_sym("")
+        sym = (
+            payload.get("symbol")
+            or (payload.get("plan") or {}).get("symbol")
+            or (payload.get("signal") or {}).get("symbol")
+            or ""
+        )
+        if not sym:
+            opt_sym = str(payload.get("option_symbol", "")).upper()
+            return self._canonical_sym(opt_sym)
+        return self._canonical_sym(sym)
+
+    def _activate_sym(self, sym: str) -> None:
+        canonical = self._canonical_sym(sym)
+        self._active_sym = canonical
+        slot = self._slots.get(canonical)
+        if slot:
+            self.__pos = slot.pos
+            self._quantity = slot.quantity
+            self._initial_quantity = slot.initial_quantity
+            self._ladder = slot.ladder
+            self._entry_nifty_ltp = slot.entry_nifty_ltp
+            self._spot_sl_level = slot.spot_sl_level
+            self._spot_sl_source = slot.spot_sl_source
+            self._spot_sl_enabled = slot.spot_sl_enabled
+            self._partial_realized_pnl = slot.partial_realized_pnl
+            self._partial_transaction_costs = slot.partial_transaction_costs
+            self._partial_quantity_closed = slot.partial_quantity_closed
+            self._candles_held = slot.candles_held
+            self._peak_pnl = slot.peak_pnl
+            self._tsl_active = slot.tsl_active
+            self._tsl_floor = slot.tsl_floor
+            self._last_momentum = slot.last_momentum
+            self._last_adx = slot.last_adx
+            self._nifty_closes = slot.nifty_closes
+            self._premium_closes = slot.premium_closes
+            self._df_buffer = slot.df_buffer
+            self._intrabar_hit_counts = slot.intrabar_hit_counts
+        else:
+            self.__pos = None
+            self._quantity = 0
+            self._initial_quantity = 0
+            self._ladder = None
+            self._entry_nifty_ltp = 0.0
+            self._spot_sl_level = 0.0
+            self._spot_sl_source = ""
+            self._spot_sl_enabled = True
+            self._partial_realized_pnl = 0.0
+            self._partial_transaction_costs = 0.0
+            self._partial_quantity_closed = 0
+            self._candles_held = 0
+            self._peak_pnl = 0.0
+            self._tsl_active = False
+            self._tsl_floor = 0.0
+            self._last_momentum = 1.0
+            self._last_adx = 20.0
+            self._nifty_closes = []
+            self._premium_closes = []
+            self._df_buffer = []
+            self._intrabar_hit_counts = {}
+
+    def _sync_active_sym(self) -> None:
+        if not self._active_sym:
+            return
+        if self.__pos is not None and getattr(self.__pos, "is_open", False):
+            slot = self._slots.get(self._active_sym)
+            if not slot:
+                slot = CommodityPositionSlot(
+                    symbol=self._active_sym,
+                    pos=self.__pos,
+                    quantity=self._quantity,
+                    initial_quantity=self._initial_quantity,
+                    entry_nifty_ltp=self._entry_nifty_ltp,
+                    ladder=self._ladder,
+                    spot_sl_level=self._spot_sl_level,
+                    spot_sl_source=self._spot_sl_source,
+                    spot_sl_enabled=self._spot_sl_enabled,
+                )
+                self._slots[self._active_sym] = slot
+            else:
+                slot.pos = self.__pos
+                slot.quantity = self._quantity
+                slot.initial_quantity = self._initial_quantity
+                slot.ladder = self._ladder
+                slot.entry_nifty_ltp = self._entry_nifty_ltp
+                slot.spot_sl_level = self._spot_sl_level
+                slot.spot_sl_source = self._spot_sl_source
+                slot.spot_sl_enabled = self._spot_sl_enabled
+            slot.partial_realized_pnl = self._partial_realized_pnl
+            slot.partial_transaction_costs = self._partial_transaction_costs
+            slot.partial_quantity_closed = self._partial_quantity_closed
+            slot.candles_held = self._candles_held
+            slot.peak_pnl = self._peak_pnl
+            slot.tsl_active = self._tsl_active
+            slot.tsl_floor = self._tsl_floor
+            slot.last_momentum = self._last_momentum
+            slot.last_adx = self._last_adx
+            slot.nifty_closes = self._nifty_closes
+            slot.premium_closes = self._premium_closes
+            slot.df_buffer = self._df_buffer
+            slot.intrabar_hit_counts = self._intrabar_hit_counts
+        else:
+            self._slots.pop(self._active_sym, None)
+
+    @property
+    def _pos(self) -> Optional[Position]:
+        if self._active_sym:
+            s = self._slots.get(self._active_sym)
+            if s and s.pos and s.pos.is_open:
+                return s.pos
+            return self.__pos
+        for s in self._slots.values():
+            if s.pos and s.pos.is_open:
+                return s.pos
+        return self.__pos
+
+    @_pos.setter
+    def _pos(self, val: Optional[Position]) -> None:
+        self.__pos = val
+        if val is None and self._active_sym:
+            self._slots.pop(self._active_sym, None)
 
     def register(self) -> None:
         self.bus.subscribe(Topic.ORDER_PLACED, self.on_order)
@@ -162,7 +345,7 @@ class PositionManagerAgent:
         self.bus.subscribe(Topic.CANDLES_READY, self.on_candle)
         self.bus.subscribe(Topic.TICK_UPDATE, self.on_tick)
         self.bus.subscribe(Topic.MARKET_REGIME, self.on_regime)
-        logger.info(f"[{self.NAME}] Registered.")
+        logger.info(f"[{self.NAME}] Registered (Multi-position concurrent tracking enabled).")
 
     async def on_regime(self, msg: Message) -> None:
         """Track current ADX and regime confidence for TSL decisions."""
@@ -171,21 +354,43 @@ class PositionManagerAgent:
             details = {}
         curr_adx = getattr(self, "_last_adx", 20.0)
         self._last_adx = float(details.get("adx", curr_adx) or curr_adx)
-        # Momentum proxy from regime conf × ADX normalised
         det_conf = float(details.get("det_conf", msg.payload.get("det_conf", 0.5)) or 0.5)
         self._last_momentum = round(det_conf, 3)
+        if self._active_sym and self._active_sym in self._slots:
+            self._slots[self._active_sym].last_adx = self._last_adx
+            self._slots[self._active_sym].last_momentum = self._last_momentum
 
-    def get_position(self) -> Optional[dict]:
-        if not self._pos or not self._pos.is_open or self._quantity <= 0:
+    def get_position(self, symbol: Optional[str] = None) -> Optional[dict]:
+        if symbol:
+            can = self._canonical_sym(symbol)
+            slot = self._slots.get(can)
+            if slot and slot.pos and slot.pos.is_open:
+                return slot.to_dict()
             return None
-        data = self._pos.to_dict()
-        data["quantity"] = self._quantity
-        data["initial_quantity"] = self._initial_quantity
-        data["partial_quantity_closed"] = self._partial_quantity_closed
-        data["partial_realized_pnl"] = round(self._partial_realized_pnl, 2)
-        data["partial_transaction_costs"] = round(self._partial_transaction_costs, 2)
-        data["profit_ladder"] = self._ladder.get_stats() if self._ladder else {}
-        return data
+        if self._active_sym and self._active_sym in self._slots:
+            slot = self._slots[self._active_sym]
+            if slot.pos and slot.pos.is_open:
+                return slot.to_dict()
+        for slot in self._slots.values():
+            if slot.pos and slot.pos.is_open:
+                return slot.to_dict()
+        if self.__pos and self.__pos.is_open and self._quantity > 0:
+            data = self.__pos.to_dict()
+            data["quantity"] = self._quantity
+            data["initial_quantity"] = self._initial_quantity
+            data["partial_quantity_closed"] = self._partial_quantity_closed
+            data["partial_realized_pnl"] = round(self._partial_realized_pnl, 2)
+            data["partial_transaction_costs"] = round(self._partial_transaction_costs, 2)
+            data["profit_ladder"] = self._ladder.get_stats() if self._ladder else {}
+            return data
+        return None
+
+    def all_open_positions(self) -> list[dict]:
+        res = []
+        for slot in self._slots.values():
+            if slot.pos and slot.pos.is_open:
+                res.append(slot.to_dict())
+        return res
 
     def _resolve_manual_exit_premium(self) -> float:
         if not self._pos:
@@ -208,10 +413,41 @@ class PositionManagerAgent:
             return float(self._pos.current_premium)
         return float(self._pos.entry_premium or 0.0)
 
-    async def manual_exit(self) -> None:
-        if self._pos:
+    async def manual_exit(self, symbol: Optional[str] = None) -> None:
+        if symbol:
+            can = self._canonical_sym(symbol)
+            if can in self._slots:
+                self._activate_sym(can)
+                if self._pos and self._pos.is_open:
+                    await self._close("MANUAL", self._resolve_manual_exit_premium())
+                    self._sync_active_sym()
+            return
+        for sym in list(self._slots.keys()):
+            self._activate_sym(sym)
+            if self._pos and self._pos.is_open:
+                await self._close("MANUAL", self._resolve_manual_exit_premium())
+                self._sync_active_sym()
+        if self.__pos and self.__pos.is_open:
             await self._close("MANUAL", self._resolve_manual_exit_premium())
-    async def force_eod_exit(self, ts: Optional[datetime] = None) -> None:
+
+    async def force_eod_exit(self, ts: Optional[datetime] = None, symbol: Optional[str] = None) -> None:
+        if symbol:
+            can = self._canonical_sym(symbol)
+            if can in self._slots:
+                self._activate_sym(can)
+                if self._pos and self._pos.is_open:
+                    await self._force_eod_exit_single(ts)
+                    self._sync_active_sym()
+            return
+        for sym in list(self._slots.keys()):
+            self._activate_sym(sym)
+            if self._pos and self._pos.is_open:
+                await self._force_eod_exit_single(ts)
+                self._sync_active_sym()
+        if self.__pos and self.__pos.is_open:
+            await self._force_eod_exit_single(ts)
+
+    async def _force_eod_exit_single(self, ts: Optional[datetime] = None) -> None:
         if not self._pos:
             return
         exit_ltp = 0.0
@@ -233,153 +469,168 @@ class PositionManagerAgent:
         await self._close("EOD", exit_ltp, ts)
 
     async def on_tick(self, msg: Message) -> None:
-        if not self._pos or not self._pos.is_open:
-            return
-        nifty_ltp = float(msg.payload.get("ltp", 0) or 0)
-        if nifty_ltp <= 0:
-            return
-        await self._maybe_intrabar_exit(nifty_ltp, self._res_ts(msg.payload.get("timestamp")))
+        tick_sym = self._resolve_symbol_from_payload(msg.payload) if msg.payload else ""
+        slots_to_check = [self._slots[tick_sym]] if (tick_sym and tick_sym in self._slots) else list(self._slots.values())
+        for slot in slots_to_check:
+            if not slot or not slot.pos or not slot.pos.is_open:
+                continue
+            self._activate_sym(slot.symbol)
+            try:
+                ltps = msg.payload.get("ltps") or {}
+                slot_ltp = ltps.get(slot.symbol) or ltps.get(self._canonical_sym(slot.symbol))
+                if not slot_ltp and tick_sym and self._canonical_sym(tick_sym) == self._canonical_sym(slot.symbol):
+                    slot_ltp = float(msg.payload.get("ltp", 0) or 0)
+                if not slot_ltp or float(slot_ltp) <= 0:
+                    continue
+                await self._maybe_intrabar_exit(float(slot_ltp), self._res_ts(msg.payload.get("timestamp")))
+            finally:
+                self._sync_active_sym()
 
     async def on_order(self, msg: Message) -> None:
         d = msg.payload
-        ep = float(d.get("entry_premium", d.get("est_premium", 0)))
-        simulated = bool(d.get("simulated", True))
+        sym = self._resolve_symbol_from_payload(d)
+        self._activate_sym(sym)
+        try:
+            ep = float(d.get("entry_premium", d.get("est_premium", 0)))
+            simulated = bool(d.get("simulated", True))
 
-        if str(d.get("execution", "")).upper() == "BACKTEST":
-            ep = apply_option_slippage(ep, "BUY", BACKTEST_OPTION_SLIPPAGE_PCT)
+            if str(d.get("execution", "")).upper() == "BACKTEST":
+                ep = apply_option_slippage(ep, "BUY", BACKTEST_OPTION_SLIPPAGE_PCT)
 
-        def _get_meta(obj):
-            if not obj:
-                return {}
-            if isinstance(obj, dict):
-                return obj.get("metadata") or {}
-            return getattr(obj, "metadata", {}) or {}
+            def _get_meta(obj):
+                if not obj:
+                    return {}
+                if isinstance(obj, dict):
+                    return obj.get("metadata") or {}
+                return getattr(obj, "metadata", {}) or {}
 
-        def _get_dir(obj):
-            if not obj:
-                return ""
-            val = getattr(obj, "direction", obj) if not isinstance(obj, dict) else obj.get("direction", "")
-            if hasattr(val, "value"):
-                val = val.value
-            s = str(val).upper()
-            if "PUT" in s:
-                return "BUY_PUT"
-            if "CALL" in s:
-                return "BUY_CALL"
-            return s
+            def _get_dir(obj):
+                if not obj:
+                    return ""
+                val = getattr(obj, "direction", obj) if not isinstance(obj, dict) else obj.get("direction", "")
+                if hasattr(val, "value"):
+                    val = val.value
+                s = str(val).upper()
+                if "PUT" in s:
+                    return "BUY_PUT"
+                if "CALL" in s:
+                    return "BUY_CALL"
+                return s
 
-        # Check if an existing position is open
-        if self._pos and self._pos.is_open:
-            # Check for Scale-In / Upgrade from Reduced Budget to Full Budget
-            curr_plan = self._pos.plan
-            lot_size = max(int(d.get("lot_size", curr_plan.lot_size if curr_plan else NIFTY_LOT_SIZE)), 1)
-            new_qty = int(d.get("quantity", lot_size))
-            curr_meta = _get_meta(curr_plan.signal if curr_plan else None)
-            curr_is_reduced = (
-                self._quantity <= lot_size
-                and (
-                    bool(curr_meta.get("reduced_budget_lane", False))
-                    or str(curr_meta.get("reduced_budget_reason", "")).startswith("rb_")
-                )
-            )
-
-            new_sig = d.get("signal")
-            new_signal_meta = _get_meta(new_sig) if new_sig else _get_meta(d)
-            new_is_reduced = bool(new_signal_meta.get("reduced_budget_lane", False)) or bool(new_signal_meta.get("reduced_budget_reason"))
-            new_is_full = not new_is_reduced or new_qty > self._quantity or int(d.get("desired_lots", 1) or 1) >= 2
-
-            new_dir = _get_dir(new_sig) or _get_dir(d)
-            curr_dir = _get_dir(curr_plan.signal if curr_plan else None) or self._direction
-
-            # If current position is 1-lot or reduced budget, and incoming order is in SAME direction
-            # and has higher size or is Full-Budget:
-            if (curr_is_reduced or self._quantity <= lot_size) and new_is_full and new_dir == curr_dir:
-                new_symbol = str(d.get("option_symbol", ""))
-                curr_symbol = str(self._pos.plan.option_symbol if self._pos.plan else "")
-
-                if new_symbol == curr_symbol:
-                    # Scale up to the new full quantity if new_qty > current quantity
-                    if new_qty > self._quantity:
-                        add_qty = new_qty - self._quantity
-                        old_qty = self._quantity
-                        old_ep = self._pos.entry_premium
-
-                        # Weighted average entry price
-                        blended_ep = round(((old_ep * old_qty) + (ep * add_qty)) / (old_qty + add_qty), 2)
-                        self._pos.entry_premium = blended_ep
-                        self._quantity = old_qty + add_qty
-                        self._initial_quantity = self._quantity
-
-                        # Upgrade plan to full budget
-                        self._pos.plan = self._build_plan(d)
-                        self._recalibrate_stop_to_fill()
-
-                        # Upgrade profit ladder to full lots
-                        total_lots = max(int(self._quantity / lot_size), 1)
-                        self._ladder = ProfitLadder(self._pos.entry_premium, total_lots, lot_size)
-
-                        logger.info(
-                            f"[{self.NAME}] 🚀 Position UPGRADED / Scaled-In | {self._pos.plan.option_symbol} | "
-                            f"Added +{add_qty} qty (Old: {old_qty} @ ₹{old_ep:.1f}, New fill: @ ₹{ep:.1f}) -> "
-                            f"Total: {self._quantity} qty ({total_lots} lots) @ blended ₹{blended_ep:.1f} | "
-                            f"Target=₹{self._pos.target_premium:.1f} | SL=₹{self._pos.sl_premium:.1f}"
-                        )
-                        return
-                else:
-                    # Switch from slow 1-lot scalp contract to new full-budget high-momentum contract
-                    # Protect existing profitable positions: do not kill profitable positions for a replacement!
-                    if self._pos.pnl_pct > 5.0:
-                        logger.info(
-                            f"[{self.NAME}] 🛡️ Keeping winning position {curr_symbol} (+{self._pos.pnl_pct:.1f}%), ignoring candidate switch {new_symbol}"
-                        )
-                        return
-                    logger.info(
-                        f"[{self.NAME}] 🔄 Closing 1-lot scalp {curr_symbol} to enter Full-Budget runner {new_symbol}"
+            # Check if an existing position is open for this commodity
+            if self._pos and self._pos.is_open:
+                # Check for Scale-In / Upgrade from Reduced Budget to Full Budget
+                curr_plan = self._pos.plan
+                lot_size = max(int(d.get("lot_size", curr_plan.lot_size if curr_plan else NIFTY_LOT_SIZE)), 1)
+                new_qty = int(d.get("quantity", lot_size))
+                curr_meta = _get_meta(curr_plan.signal if curr_plan else None)
+                curr_is_reduced = (
+                    self._quantity <= lot_size
+                    and (
+                        bool(curr_meta.get("reduced_budget_lane", False))
+                        or str(curr_meta.get("reduced_budget_reason", "")).startswith("rb_")
                     )
-                    await self._close("REPLACED_BY_FULL_RUNNER", self._pos.current_premium, self._res_ts(d.get("timestamp")))
-                    # Fall through to instantiate the new full-budget position
-            else:
-                return
+                )
 
-        self._pos = Position(plan=self._build_plan(d), entry_premium=ep, is_simulated=bool(d.get("simulated", True)), kite_order_id=d.get("order_id", ""), execution_mode=str(d.get("execution", "OBSERVE")).upper(), entry_time=self._res_ts(d.get("timestamp")))
-        sig_val = d.get("signal")
-        nifty_val = (
-            sig_val.get("nifty_ltp", 0) if isinstance(sig_val, dict)
-            else getattr(sig_val, "nifty_ltp", 0)
-        ) or d.get("nifty_ltp", 0) or d.get("spot", 0) or self._last_nifty_spot
-        self._entry_nifty_ltp = float(nifty_val or 0.0)
-        self._quantity = int(d.get("quantity", self._pos.plan.quantity if self._pos and self._pos.plan else NIFTY_LOT_SIZE))
-        self._initial_quantity = self._quantity
-        self._partial_realized_pnl = 0.0
-        self._partial_transaction_costs = 0.0
-        self._partial_quantity_closed = 0
-        lots = max(int(self._quantity / max(self._pos.plan.lot_size, 1)), 1)
-        self._ladder = ProfitLadder(self._pos.entry_premium, lots, self._pos.plan.lot_size)
-        self._prev_pnl = 0.0
+                new_sig = d.get("signal")
+                new_signal_meta = _get_meta(new_sig) if new_sig else _get_meta(d)
+                new_is_reduced = bool(new_signal_meta.get("reduced_budget_lane", False)) or bool(new_signal_meta.get("reduced_budget_reason"))
+                new_is_full = not new_is_reduced or new_qty > self._quantity or int(d.get("desired_lots", 1) or 1) >= 2
 
-        # Reset per-position tracking
-        self._candles_held = 0
-        self._peak_pnl = 0.0
-        self._tsl_active = False
-        self._tsl_floor = self._pos.sl_premium
-        self._nifty_closes = []
-        self._premium_closes = []
-        direction = _get_dir(sig_val) or _get_dir(d) or "BUY_CALL"
-        self._direction = direction
-        # Store structural SL level from planner payload
-        self._spot_sl_level   = float(self._pos.plan.sl_spot_level or d.get("sl_spot_level", 0) or 0)
-        self._spot_sl_source  = str(self._pos.plan.sl_source or d.get("sl_source", "") or "")
-        self._spot_sl_enabled = self._spot_sl_level > 0
-        self._df_buffer       = []
-        self._intrabar_hit_counts = {}
+                new_dir = _get_dir(new_sig) or _get_dir(d)
+                curr_dir = _get_dir(curr_plan.signal if curr_plan else None) or self._direction
 
-        logger.info(
-            f"[{self.NAME}] 📂 Position opened | "
-            f"{'SIM' if simulated else 'REAL'} | "
-            f"{self._pos.plan.option_symbol} @ ₹{ep:.1f} | "
-            f"SL=₹{self._pos.sl_premium:.1f} | Target=₹{self._pos.target_premium:.1f} | "
-            f"SpotSL={self._spot_sl_level:.0f} ({self._spot_sl_source})"
-        )
+                # If current position is 1-lot or reduced budget, and incoming order is in SAME direction
+                # and has higher size or is Full-Budget:
+                if (curr_is_reduced or self._quantity <= lot_size) and new_is_full and new_dir == curr_dir:
+                    new_symbol = str(d.get("option_symbol", ""))
+                    curr_symbol = str(self._pos.plan.option_symbol if self._pos.plan else "")
+
+                    if new_symbol == curr_symbol:
+                        # Scale up to the new full quantity if new_qty > current quantity
+                        if new_qty > self._quantity:
+                            add_qty = new_qty - self._quantity
+                            old_qty = self._quantity
+                            old_ep = self._pos.entry_premium
+
+                            # Weighted average entry price
+                            blended_ep = round(((old_ep * old_qty) + (ep * add_qty)) / (old_qty + add_qty), 2)
+                            self._pos.entry_premium = blended_ep
+                            self._quantity = old_qty + add_qty
+                            self._initial_quantity = self._quantity
+
+                            # Upgrade plan to full budget
+                            self._pos.plan = self._build_plan(d)
+                            self._recalibrate_stop_to_fill()
+
+                            # Upgrade profit ladder to full lots
+                            total_lots = max(int(self._quantity / lot_size), 1)
+                            self._ladder = ProfitLadder(self._pos.entry_premium, total_lots, lot_size)
+
+                            logger.info(
+                                f"[{self.NAME}] 🚀 Position UPGRADED / Scaled-In | {self._pos.plan.option_symbol} | "
+                                f"Added +{add_qty} qty (Old: {old_qty} @ ₹{old_ep:.1f}, New fill: @ ₹{ep:.1f}) -> "
+                                f"Total: {self._quantity} qty ({total_lots} lots) @ blended ₹{blended_ep:.1f} | "
+                                f"Target=₹{self._pos.target_premium:.1f} | SL=₹{self._pos.sl_premium:.1f}"
+                            )
+                            return
+                    else:
+                        # Switch from slow 1-lot scalp contract to new full-budget high-momentum contract
+                        # Protect existing profitable positions: do not kill profitable positions for a replacement!
+                        if self._pos.pnl_pct > 5.0:
+                            logger.info(
+                                f"[{self.NAME}] 🛡️ Keeping winning position {curr_symbol} (+{self._pos.pnl_pct:.1f}%), ignoring candidate switch {new_symbol}"
+                            )
+                            return
+                        logger.info(
+                            f"[{self.NAME}] 🔄 Closing 1-lot scalp {curr_symbol} to enter Full-Budget runner {new_symbol}"
+                        )
+                        await self._close("REPLACED_BY_FULL_RUNNER", self._pos.current_premium, self._res_ts(d.get("timestamp")))
+                        # Fall through to instantiate the new full-budget position
+                else:
+                    return
+
+            self._pos = Position(plan=self._build_plan(d), entry_premium=ep, is_simulated=bool(d.get("simulated", True)), kite_order_id=d.get("order_id", ""), execution_mode=str(d.get("execution", "OBSERVE")).upper(), entry_time=self._res_ts(d.get("timestamp")))
+            sig_val = d.get("signal")
+            nifty_val = (
+                sig_val.get("nifty_ltp", 0) if isinstance(sig_val, dict)
+                else getattr(sig_val, "nifty_ltp", 0)
+            ) or d.get("nifty_ltp", 0) or d.get("spot", 0) or self._last_nifty_spot
+            self._entry_nifty_ltp = float(nifty_val or 0.0)
+            self._quantity = int(d.get("quantity", self._pos.plan.quantity if self._pos and self._pos.plan else NIFTY_LOT_SIZE))
+            self._initial_quantity = self._quantity
+            self._partial_realized_pnl = 0.0
+            self._partial_transaction_costs = 0.0
+            self._partial_quantity_closed = 0
+            lots = max(int(self._quantity / max(self._pos.plan.lot_size, 1)), 1)
+            self._ladder = ProfitLadder(self._pos.entry_premium, lots, self._pos.plan.lot_size)
+            self._prev_pnl = 0.0
+
+            # Reset per-position tracking
+            self._candles_held = 0
+            self._peak_pnl = 0.0
+            self._tsl_active = False
+            self._tsl_floor = self._pos.sl_premium
+            self._nifty_closes = []
+            self._premium_closes = []
+            direction = _get_dir(sig_val) or _get_dir(d) or "BUY_CALL"
+            self._direction = direction
+            # Store structural SL level from planner payload
+            self._spot_sl_level   = float(self._pos.plan.sl_spot_level or d.get("sl_spot_level", 0) or 0)
+            self._spot_sl_source  = str(self._pos.plan.sl_source or d.get("sl_source", "") or "")
+            self._spot_sl_enabled = self._spot_sl_level > 0
+            self._df_buffer       = []
+            self._intrabar_hit_counts = {}
+
+            logger.info(
+                f"[{self.NAME}] 📂 Position opened | "
+                f"{'SIM' if simulated else 'REAL'} | "
+                f"{self._pos.plan.option_symbol} @ ₹{ep:.1f} | "
+                f"SL=₹{self._pos.sl_premium:.1f} | Target=₹{self._pos.target_premium:.1f} | "
+                f"SpotSL={self._spot_sl_level:.0f} ({self._spot_sl_source})"
+            )
+        finally:
+            self._sync_active_sym()
 
     def _recalibrate_stop_to_fill(self) -> None:
         if not self._pos:
@@ -415,9 +666,23 @@ class PositionManagerAgent:
             )
 
     async def on_candle(self, msg: Message) -> None:
-        if not self._pos or not self._pos.is_open: return
         p, ts = msg.payload, self._res_ts(msg.payload.get("timestamp"))
-        nifty = float(p.get("ltp", 0))
+        candle_sym = self._resolve_symbol_from_payload(p)
+        slot = self._slots.get(candle_sym)
+        if not slot or not slot.pos or not slot.pos.is_open:
+            if not (self.__pos and self.__pos.is_open and self._canonical_sym(getattr(self._pos.plan, "symbol", "")) == candle_sym):
+                return
+        self._activate_sym(candle_sym)
+        try:
+            await self._on_candle_inner(msg, p, ts)
+        finally:
+            self._sync_active_sym()
+
+    async def _on_candle_inner(self, msg: Message, p: dict, ts: datetime) -> None:
+        ltps = p.get("ltps") or {}
+        pos_sym = getattr(self._pos.plan, "symbol", "") or self._active_sym or ""
+        slot_spot = ltps.get(pos_sym) or ltps.get(self._canonical_sym(pos_sym))
+        nifty = float(slot_spot or p.get("ltp") or p.get("close", 0) or 0)
         profile = self._management_profile()
         self._candles_held += 1
         use_spot_sl = self._pos.execution_mode != "BACKTEST" or _backtest_spot_sl_enabled()
@@ -451,7 +716,7 @@ class PositionManagerAgent:
                 reason = "TRAILING_SL" if self._pos.breakeven_armed else ("SPOT_SL" if spot_sl_breached else "SL_HIT")
                 await self._close(reason, self._pos.sl_premium, ts); return
 
-        nifty_ltp = float(msg.payload.get("ltp", 0))
+        nifty_ltp = nifty
         option_sym = self._pos.plan.option_symbol
 
         use_data_ltp = bool(self.data_agent)
@@ -492,33 +757,39 @@ class PositionManagerAgent:
             return
 
         trail_pct = _tiered_tsl_pct(self._peak_pnl, self._last_adx)
-        if profile["runner"] and self._peak_pnl < 35.0:
+        if profile["runner"] and self._peak_pnl < 15.0:
             trail_pct = 0.0
 
         # Dynamic Profit Protection & Breakeven Lock on Momentum Bursts
         if profile.get("runner"):
-            # Runners: Allow wide breathing room so 15-20% intraday pullbacks ride trends into EOD
-            if trail_pct > 0 or self._peak_pnl >= 18.0:
+            if trail_pct > 0 or self._peak_pnl >= 10.0:
                 peak_premium = self._pos.entry_premium * (1 + self._peak_pnl / 100)
-                effective_trail = max(trail_pct, 25.0) if trail_pct > 0 else 0.0
-                new_tsl_floor = peak_premium * (1 - effective_trail / 100) if effective_trail > 0 else self._pos.entry_premium * 1.002
+                effective_trail = trail_pct if trail_pct > 0 else 12.0
+                new_tsl_floor = peak_premium * (1 - effective_trail / 100)
 
-                # Tiered Profit Protection for Runners:
-                # 1. Breakeven Lock (Peak >= 18.0%): Lock stop to Breakeven (+0.2%)
-                if self._peak_pnl >= 18.0:
-                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.002)
-                # 2. Strong Expansion (Peak >= 35.0%): Lock at least +15.0% profit
+                # Tiered Progressive Profit Protection for Runners:
+                if self._peak_pnl >= 10.0:
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.005)
+                if self._peak_pnl >= 12.0:
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.04)
+                if self._peak_pnl >= 15.0:
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.08)
+                if self._peak_pnl >= 20.0:
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.12)
+                if self._peak_pnl >= 25.0:
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.16)
                 if self._peak_pnl >= 35.0:
-                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.15)
-                # 3. Massive Runner (Peak >= 50.0%): Lock at least +30.0% profit
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.22)
                 if self._peak_pnl >= 50.0:
-                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.30)
-                # 4. Ultra Runner (Peak >= 75.0%): Lock at least +50.0% profit
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.35)
                 if self._peak_pnl >= 75.0:
-                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.50)
-                # 5. Super Spike (Peak >= 100.0%): Lock at least +70.0% profit
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.55)
                 if self._peak_pnl >= 100.0:
-                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.70)
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.75)
+
+                # Dynamic peak giveback cap: never give back > 5.5% once peak >= 12%
+                if self._peak_pnl >= 12.0:
+                    new_tsl_floor = max(new_tsl_floor, peak_premium * 0.945)
 
                 if new_tsl_floor > self._tsl_floor:
                     self._tsl_floor = new_tsl_floor
@@ -542,18 +813,23 @@ class PositionManagerAgent:
                 # 1. Momentum Burst (Peak >= 5.0%): Lock stop to Breakeven (+0.2%)
                 if self._peak_pnl >= 5.0:
                     new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.002)
-                # 2. Solid Expansion (Peak >= 12.0%): Lock at least +3.0% profit
-                if self._peak_pnl >= 12.0:
-                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.03)
-                # 3. High Momentum (Peak >= 20.0%): Lock at least +10.0% profit
+                # 2. Solid Expansion (Peak >= 10.0%): Lock at least +4.0% profit
+                if self._peak_pnl >= 10.0:
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.04)
+                # 3. High Momentum (Peak >= 15.0%): Lock at least +8.0% profit
+                if self._peak_pnl >= 15.0:
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.08)
+                # 4. Major Extension (Peak >= 20.0%): Lock at least +12.0% profit
                 if self._peak_pnl >= 20.0:
-                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.10)
-                # 4. Major Extension (Peak >= 30.0%): Lock at least +18.0% profit
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.12)
+                # 5. Massive Runner (Peak >= 30.0%): Lock at least +20.0% profit
                 if self._peak_pnl >= 30.0:
-                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.18)
-                # 5. Massive Runner (Peak >= 50.0%): Lock at least +35.0% profit
+                    new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.20)
                 if self._peak_pnl >= 50.0:
                     new_tsl_floor = max(new_tsl_floor, self._pos.entry_premium * 1.35)
+
+                if self._peak_pnl >= 10.0:
+                    new_tsl_floor = max(new_tsl_floor, peak_premium * 0.95)
 
                 if new_tsl_floor > self._tsl_floor:
                     self._tsl_floor = new_tsl_floor
@@ -634,8 +910,9 @@ class PositionManagerAgent:
         tsl_condition = (current_ltp < self._tsl_floor) if is_pos_long else (current_ltp > self._tsl_floor)
         if self._tsl_active and tsl_condition:
             await self._close("TRAILING_SL", current_ltp, ts); return
+        is_single_lot = self._quantity <= max(int(self._pos.plan.lot_size or 1), 1)
         tgt_condition = (current_ltp >= self._pos.plan.target_premium) if is_pos_long else (current_ltp <= self._pos.plan.target_premium)
-        if not profile.get("runner", False) and tgt_condition:
+        if (not profile.get("runner", False) or is_single_lot) and tgt_condition:
             await self._close("TARGET_HIT", current_ltp, ts); return
         exit_signal = self._exit_signal_reason(pnl_pct=pnl_pct, nifty=nifty, mins=mins, profile=profile)
         if exit_signal:
@@ -718,11 +995,13 @@ class PositionManagerAgent:
         if not self._pos:
             return 0.0
         if profile.get("is_hero_zero"):
-            floor_pct = 0.75  # 25% max loss floor for HeroZero 0DTE trades
+            floor_pct = 0.50  # 50% max catastrophic floor for HeroZero 0DTE trades
         elif self._spot_sl_enabled:
-            floor_pct = 0.92 if profile.get("runner") else 0.94
+            # When spot SL is active, spot structure governs normal exit.
+            # Catastrophic floor is only a backstop for extreme black swan / spot feed failure.
+            floor_pct = 0.60 if profile.get("runner") else 0.65
         else:
-            floor_pct = 0.91 if profile.get("runner") else 0.925
+            floor_pct = 0.65 if profile.get("runner") else 0.70
         return self._pos.entry_premium * floor_pct
 
     def _paper_exit_premium(self, option_sym: str, fallback_ltp: float, ts: datetime) -> float:
@@ -798,10 +1077,32 @@ class PositionManagerAgent:
         pnl_pct = self._pos.pnl_pct
         if self._pos.execution_mode != "BACKTEST" and pnl_pct > self._peak_pnl:
             self._peak_pnl = pnl_pct
-            # Real-time Momentum Breakeven Lock on Intrabar Surges (allow normal breathing room)
-            be_surge_threshold = 18.0 if profile.get("runner") else 12.0
+            # Real-time Momentum Breakeven Lock & Giveback Protection on Intrabar Surges
+            be_surge_threshold = float(profile.get("breakeven_trigger_pct", 10.0))
+            if profile.get("fragile_experimental"):
+                be_surge_threshold = min(be_surge_threshold, 8.0)
             if self._peak_pnl >= be_surge_threshold:
-                new_floor = max(self._tsl_floor, self._pos.entry_premium * 1.002)
+                new_floor = max(self._tsl_floor, self._pos.entry_premium * 1.005)
+                if self._peak_pnl >= 12.0:
+                    new_floor = max(new_floor, self._pos.entry_premium * 1.04)
+                if self._peak_pnl >= 15.0:
+                    new_floor = max(new_floor, self._pos.entry_premium * 1.08)
+                if self._peak_pnl >= 20.0:
+                    new_floor = max(new_floor, self._pos.entry_premium * 1.12)
+                if self._peak_pnl >= 25.0:
+                    new_floor = max(new_floor, self._pos.entry_premium * 1.16)
+                if self._peak_pnl >= 35.0:
+                    new_floor = max(new_floor, self._pos.entry_premium * 1.22)
+                if self._peak_pnl >= 50.0:
+                    new_floor = max(new_floor, self._pos.entry_premium * 1.35)
+
+                # Dynamic peak giveback cap: once peak >= 12%, do not give back more than giveback_cap_pct from peak
+                if self._peak_pnl >= 12.0:
+                    giveback_pct = float(profile.get("giveback_cap_pct", 5.5))
+                    giveback_mult = 1.0 - (giveback_pct / 100.0)
+                    peak_prem = self._pos.entry_premium * (1.0 + self._peak_pnl / 100.0)
+                    new_floor = max(new_floor, peak_prem * giveback_mult)
+
                 if new_floor > self._tsl_floor:
                     self._tsl_floor = new_floor
                     self._pos.sl_premium = max(self._pos.sl_premium, round(self._tsl_floor, 1))
@@ -830,7 +1131,8 @@ class PositionManagerAgent:
         if self._intrabar_hit("hard_sl", hard_sl_hit):
             await self._close("SL_HIT", current_ltp, ts)
             return
-        if not profile.get("runner", False) and self._intrabar_hit("target", target_hit):
+        is_single_lot = self._quantity <= max(int(self._pos.plan.lot_size or 1), 1)
+        if (not profile.get("runner", False) or is_single_lot) and self._intrabar_hit("target", target_hit):
             await self._close("TARGET_HIT", current_ltp, ts)
             return
         if self._intrabar_hit("tsl", trailing_hit):
@@ -878,10 +1180,12 @@ class PositionManagerAgent:
         # Profit floors are intentionally conservative. Previous logic armed
         # from +6% and then trailed off tiny fill-aware stop distances, turning
         # normal pullbacks into PROFIT_PROTECT before trades could reach target.
-        breakeven_trigger = 7.5 if profile.get("fragile_experimental") else (24.0 if profile["runner"] else 14.0)
+        breakeven_trigger = float(profile.get("breakeven_trigger_pct", 10.0))
+        if profile.get("fragile_experimental"):
+            breakeven_trigger = min(breakeven_trigger, 7.5)
         if pnl >= breakeven_trigger and not self._pos.breakeven_armed:
             self._pos.breakeven_armed = True
-            lock_pct = 1.002 if profile.get("fragile_experimental") else (1.015 if profile["runner"] else 1.003)
+            lock_pct = 1.002 if profile.get("fragile_experimental") else 1.005
             self._pos.sl_premium = max(self._pos.sl_premium, round(entry * lock_pct, 1))
 
         if profile.get("is_hero_zero"):
@@ -898,31 +1202,53 @@ class PositionManagerAgent:
             if pnl >= 400.0:
                 self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 3.50, 1))
         elif profile["runner"]:
-            if pnl >= 38.0:
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.08, 1))
-            if pnl >= 65.0:
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.28, 1))
-            if pnl >= 95.0:
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.50, 1))
-        else:
-            if pnl >= 18.0:
+            if pnl >= 12.0:
                 self._pos.breakeven_armed = True
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.01, 1))
-            if pnl >= 28.0:
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.05, 1))
-            if pnl >= 42.0:
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.14, 1))
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.04, 1))
+            if pnl >= 15.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.08, 1))
+            if pnl >= 20.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.12, 1))
+            if pnl >= 25.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.16, 1))
+            if pnl >= 35.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.22, 1))
+            if pnl >= 50.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.35, 1))
             if pnl >= 65.0:
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.32, 1))
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.45, 1))
             if pnl >= 95.0:
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.55, 1))
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.65, 1))
+        else:
+            if pnl >= 10.0:
+                self._pos.breakeven_armed = True
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.04, 1))
+            if pnl >= 15.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.08, 1))
+            if pnl >= 20.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.12, 1))
+            if pnl >= 28.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.18, 1))
+            if pnl >= 42.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.28, 1))
+            if pnl >= 65.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.45, 1))
+            if pnl >= 95.0:
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.65, 1))
+
+        # Dynamic peak trail for all normal/runner positions: if peak >= +12%, never give back > giveback_cap_pct from peak
+        if self._peak_pnl >= 12.0:
+            giveback_pct = float(profile.get("giveback_cap_pct", 5.5))
+            giveback_mult = 1.0 - (giveback_pct / 100.0)
+            peak_trail_sl = round(self._pos.peak_premium * giveback_mult, 1)
+            self._pos.sl_premium = max(self._pos.sl_premium, peak_trail_sl)
 
         if not self._pos.breakeven_armed:
-            r = (ltp - entry) / stop
-            r_trigger = 0.45 if profile.get("fragile_experimental") else (0.85 if profile["runner"] else 0.78)
-            if r >= r_trigger:
-                risk_keep = 0.08 if profile.get("fragile_experimental") else 0.2
-                self._pos.sl_premium = max(self._pos.sl_premium, round(entry - stop*risk_keep, 1)) # Cut open risk once trade proves direction.
+            r = (ltp - entry) / max(stop, 0.1)
+            # Only cut risk if r >= 1.0 (trade has proved direction with 1R gain), locking breakeven
+            if r >= 1.0:
+                self._pos.breakeven_armed = True
+                self._pos.sl_premium = max(self._pos.sl_premium, round(entry * 1.005, 1))
         elif self._peak_pnl >= (32.0 if profile["runner"] else 28.0):
             pnl_val = self._pos.pnl_pct
             base = stop * (1.50 if profile["runner"] else 1.25)
@@ -931,6 +1257,17 @@ class PositionManagerAgent:
             else:
                 trail_mult = 1.7 if pnl_val >= 45 else 2.2
             self._pos.sl_premium = max(self._pos.sl_premium, round(self._pos.peak_premium - base * trail_mult, 1))
+
+    def _enrich_profile(self, profile: dict) -> dict:
+        plan = self._pos.plan if self._pos else None
+        sym = getattr(plan, "symbol", "") or self._active_sym or os.getenv("INSTRUMENT", "CRUDEOILM")
+        inst_cfg = get_instrument_strategy_config(str(sym))
+        profile["giveback_cap_pct"] = float(inst_cfg.get("giveback_cap_pct", 5.5))
+        profile["breakeven_trigger_pct"] = float(inst_cfg.get("breakeven_trigger_pct", 10.0))
+        profile["target2_pct"] = float(inst_cfg.get("target2_pct", 22.0))
+        profile["stop_loss_pct"] = float(inst_cfg.get("stop_loss_pct", 10.0))
+        profile["inst_cfg"] = inst_cfg
+        return profile
 
     def _management_profile(self) -> dict:
         plan = self._pos.plan
@@ -941,7 +1278,7 @@ class PositionManagerAgent:
             or "HeroZero" in {str(s).strip() for s in (plan.signal.strategies_fired or [])}
         )
         if is_hero_zero:
-            return {
+            return self._enrich_profile({
                 "runner": True,
                 "fragile_experimental": False,
                 "is_hero_zero": True,
@@ -953,7 +1290,7 @@ class PositionManagerAgent:
                 "flat_high_pct": 5.0,
                 "time_extension_minutes": 20,
                 "time_floor_offset": -2.0,
-            }
+            })
         is_reduced = (
             self._quantity <= max(int(plan.lot_size or NIFTY_LOT_SIZE), 1)
             and (
@@ -962,7 +1299,7 @@ class PositionManagerAgent:
             )
         )
         if is_reduced and int(plan.signal.votes or 0) < 6:
-            return {
+            return self._enrich_profile({
                 "runner": False,
                 "fragile_experimental": False,
                 "decision_candles": 3,
@@ -973,7 +1310,7 @@ class PositionManagerAgent:
                 "flat_high_pct": 2.0,
                 "time_extension_minutes": 10,
                 "time_floor_offset": 0.25,
-            }
+            })
         setup = ((metadata.get("_context") or {}).get("setup") or {})
         setup_type = str(setup.get("setup_type", "") or "").lower()
         setup_strength = float(setup.get("setup_strength", 0.0) or 0.0)
@@ -1053,7 +1390,7 @@ class PositionManagerAgent:
             runner = True
 
         if negative_edge:
-            return {
+            return self._enrich_profile({
                 "runner": False,
                 "fragile_experimental": True,
                 "decision_candles": 3,
@@ -1064,9 +1401,9 @@ class PositionManagerAgent:
                 "flat_high_pct": 0.75,
                 "time_extension_minutes": -25,
                 "time_floor_offset": 0.75,
-            }
+            })
         if runner:
-            return {
+            return self._enrich_profile({
                 "runner": True,
                 "fragile_experimental": False,
                 "decision_candles": 4,
@@ -1077,8 +1414,8 @@ class PositionManagerAgent:
                 "flat_high_pct": 0.75,
                 "time_extension_minutes": 25,
                 "time_floor_offset": -1.0,
-            }
-        return {
+            })
+        return self._enrich_profile({
             "runner": False,
             "fragile_experimental": fragile_experimental,
             "decision_candles": 3,
@@ -1089,7 +1426,7 @@ class PositionManagerAgent:
             "flat_high_pct": 1.25 if fragile_experimental else 1.0,
             "time_extension_minutes": -25 if fragile_experimental else -10,
             "time_floor_offset": 0.75 if fragile_experimental else 0.35,
-        }
+        })
 
     def _exit_signal_reason(self, *, pnl_pct: float, nifty: float, mins: float, profile: dict) -> str:
         if not self._pos:
@@ -1252,9 +1589,13 @@ class PositionManagerAgent:
         closing_peak_pnl = self._peak_pnl
         closing_candles_held = self._candles_held
         closing_tsl_active = self._tsl_active
+        closing_sym = self._active_sym or self._resolve_symbol_from_payload({"option_symbol": closing_pos.plan.option_symbol if closing_pos and closing_pos.plan else ""})
 
         # Mark position as None immediately so subsequent events see position closed
         self._pos = None
+        if closing_sym in self._slots:
+            self._slots.pop(closing_sym, None)
+        self._active_sym = ""
 
         logger.info(f"[{self.NAME}] CLOSING POSITION | reason={reason} | sym={closing_pos.plan.option_symbol if closing_pos and closing_pos.plan else 'NA'} | ltp={ltp} | ts={ts}")
         # Use wall-clock time for real trades to match broker/audit logs.
@@ -1318,14 +1659,10 @@ class PositionManagerAgent:
                     from utils.telegram_notifier import get_notifier
                     notifier = get_notifier()
                     fail_msg = (
-                        f"🚨 *CRITICAL TRADING ALERT: EXIT ORDER FAILED*\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"❌ Failed to close: `{closing_pos.plan.option_symbol}` ({closing_quantity} Qty)\n"
-                        f"⚠️ Exit Trigger Reason: `{reason}`\n"
-                        f"🛑 Broker Rejection: `{exit_result.reason}`\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"⏰ Time: {datetime.now(IST).strftime('%H:%M:%S IST')}\n"
-                        f"ACTION: Bot will auto-retry on next tick. Check broker app manually if persists!"
+                        f"🚨 *EXIT FAILED — MANUAL INTERVENTION REQUIRED*\n"
+                        f"Symbol: `{closing_pos.plan.option_symbol}`\n"
+                        f"Reason: `{exit_result.reason}`\n"
+                        f"Action: Position kept open in tracker. Close manually in terminal!"
                     )
                     await notifier.send_text(fail_msg, target="LIVE", parse_mode="markdown")
                 except Exception as err:
@@ -1345,6 +1682,7 @@ class PositionManagerAgent:
         sig_dict = closing_pos.plan.signal.to_dict()
         sig_id = getattr(closing_pos.plan.signal, "signal_id", "") or sig_dict.get("signal_id", "")
         await self.bus.publish(Topic.POSITION_CLOSED, {
+            "symbol":        closing_sym,
             "signal_id":     sig_id,
             "option_symbol": closing_pos.plan.option_symbol,
             "signal":        sig_dict,

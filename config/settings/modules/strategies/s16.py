@@ -1,11 +1,11 @@
 import os
 from config.settings.utils import *
 
-S16_GAP_STRONG_PCT = float(os.getenv("S16_GAP_STRONG_PCT", "0.60"))
-S16_GAP_VOL_MULT = float(os.getenv("S16_GAP_VOL_MULT", "1.20"))
-S16_GAP_RSI_BULL = float(os.getenv("S16_GAP_RSI_BULL", "55"))
-S16_GAP_RSI_BEAR = float(os.getenv("S16_GAP_RSI_BEAR", "45"))
-S16_GAP_WINDOW_END_H = int(os.getenv("S16_GAP_WINDOW_END_H", "11"))
+S16_GAP_STRONG_PCT = float(os.getenv("S16_GAP_STRONG_PCT", "0.40"))
+S16_GAP_VOL_MULT = float(os.getenv("S16_GAP_VOL_MULT", "1.10"))
+S16_GAP_RSI_BULL = float(os.getenv("S16_GAP_RSI_BULL", "53"))
+S16_GAP_RSI_BEAR = float(os.getenv("S16_GAP_RSI_BEAR", "47"))
+S16_GAP_WINDOW_END_H = int(os.getenv("S16_GAP_WINDOW_END_H", "14"))
 S16_VOL_MA_PERIOD = int(os.getenv("S16_VOL_MA_PERIOD", "20"))
 S16_RSI_PERIOD = int(os.getenv("S16_RSI_PERIOD", "14"))
 S16_CONF_BASE = float(os.getenv("S16_CONF_BASE", "0.66"))

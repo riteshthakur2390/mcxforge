@@ -152,10 +152,13 @@ def _direction_ok(
         # For reduced budget, we allow invalid structure since we use tight SL & 1-lot
         pass  # Removed: structure validation too strict for scalps
     signal_minutes = _signal_minutes(str(data.get("timestamp", "")))
+    sym = str(data.get("symbol") or os.getenv("COMMODITY", "SILVERM")).upper()
+    is_commodity = any(c in sym for c in ("SILVER", "GOLD", "CRUDE", "NATGAS", "MCX"))
     if signal_minutes is not None:
-        if signal_minutes >= 15 * 60 + 20:
+        late_cutoff = (23 * 60 + 15) if is_commodity else (15 * 60 + 20)
+        if signal_minutes >= late_cutoff:
             return False, "late_session_penalty", False
-        if direction == "BUY_CALL" and 9 * 60 + 30 <= signal_minutes < 10 * 60:
+        if not is_commodity and direction == "BUY_CALL" and 9 * 60 + 30 <= signal_minutes < 10 * 60:
             v = int(data.get("strategy_votes") or data.get("votes") or votes or 0)
             st = float(data.get("setup_strength") or setup_strength or 0.0)
             if not (v >= 5 and st >= 0.50):
@@ -215,12 +218,19 @@ def evaluate_for_reduced_budget(
         Estimated option entry premium in Rs. per unit.  When supplied, used
         to enforce the premium cap derived from empirical option candle audit.
     """
-    # ── Strict ML Gate: Enforce ML Confidence >= 0.32 (Zero exception) ──────
-    if success_prob < 0.32:
-        return False, f"rb_low_ml_prob: success_prob={success_prob:.4f} < 0.32 (Strict ML Gate)"
+    # ── Calibrated ML Gate: Respect instrument base rate and consensus ───────
+    # For high-consensus breakouts (votes >= 5 or votes >= 4 with strong setup),
+    # an uncalibrated ML classifier must not veto macro trends.
+    sym = str(data.get("symbol") or os.getenv("COMMODITY", "SILVERM")).upper()
+    is_commodity = any(c in sym for c in ("SILVER", "GOLD", "CRUDE", "NATGAS", "MCX"))
+    
+    min_prob_threshold = 0.10 if votes >= 6 else (0.12 if votes >= 5 else (0.15 if (votes >= 4 and setup_strength >= RB_MIN_SETUP) else 0.22))
+    if success_prob < min_prob_threshold:
+        return False, f"rb_low_ml_prob: success_prob={success_prob:.4f} < {min_prob_threshold:.2f} (votes={votes})"
 
-    # ── Smart Filter 1: Block expensive options (empirical: >Rs.140 → 22% WR) ──
-    if entry_premium is not None and entry_premium >= RB_MAX_PREMIUM_INR:
+    # ── Smart Filter 1: Block expensive index options (instrument-aware) ──────
+    # Only applies to equity index options (Nifty/Banknifty); commodities trade at much higher nominal points.
+    if not is_commodity and entry_premium is not None and entry_premium >= RB_MAX_PREMIUM_INR:
         return False, (
             f"rb_expensive_premium: entry_premium=Rs.{entry_premium:.1f} "
             f">= cap=Rs.{RB_MAX_PREMIUM_INR:.0f} (22% WR historically)"
@@ -234,18 +244,20 @@ def evaluate_for_reduced_budget(
             f"< 09:45 cutoff (23% WR at open — wide spreads, gap reversals)"
         )
 
-    # ── Smart Filter 3: Close session (>=14:30) requires votes >= 6 (votes >= 3 for HeroZero) ─
+    # ── Smart Filter 3: Close session higher-conviction gate ─────────────────
     strats = data.get("strategies_fired") or []
     is_hero = "HeroZero" in strats
     required_close_votes = 3 if is_hero else RB_CLOSE_SESSION_MIN_VOTES
+    close_session_cutoff = (22 * 60 + 45) if is_commodity else RB_CLOSE_SESSION_START_MINUTE
     if (
         signal_minutes_val is not None
-        and signal_minutes_val >= RB_CLOSE_SESSION_START_MINUTE
+        and signal_minutes_val >= close_session_cutoff
         and votes < required_close_votes
     ):
+        cutoff_str = "22:45" if is_commodity else "14:30"
         return False, (
             f"rb_close_low_votes: votes={votes} < {required_close_votes} "
-            f"required after 14:30 (close session higher-conviction gate)"
+            f"required after {cutoff_str} (close session higher-conviction gate)"
         )
 
     # ── Smart Filter 4: Day-move bias suppressor (empirical: July 23-24 cluster) ─
@@ -327,19 +339,20 @@ def evaluate_for_reduced_budget(
 
     # ── Gate 4: minimum rank score ────────────────────────────────────────
     if votes >= 8:
-        min_rank = 0.50
+        min_rank = 0.45
     elif votes >= 6:
-        min_rank = 0.52
+        min_rank = 0.48
     elif votes >= 5:
-        min_rank = 0.55
+        min_rank = 0.50
     elif votes >= 4:
-        min_rank = 0.58
+        min_rank = 0.52
     else:
         min_rank = RB_MIN_RANK
 
     if rejection_source == "ML_CONFIDENCE":
         # ML confidence rejection — use the near-ML rank floor
-        effective_min_rank = min(min_rank, RB_NEAR_ML_MIN_RANK) if has_consensus else RB_NEAR_ML_MIN_RANK
+        near_ml_floor = 0.48 if votes >= 5 else RB_NEAR_ML_MIN_RANK
+        effective_min_rank = min(min_rank, near_ml_floor) if has_consensus else near_ml_floor
     else:
         # Rank rejection — rank must be in the near-miss band
         effective_min_rank = min_rank
@@ -350,11 +363,20 @@ def evaluate_for_reduced_budget(
             f"min={effective_min_rank:.2f}"
         )
 
-    # ── Gate 5: minimum model confidence (strict >= 0.32) ────────────────
-    prob_floor = 0.32
-    if votes < 4:
-        # setup_strength qualified: require closer to threshold
-        prob_floor = max(0.32, required_conf - RB_NEAR_ML_DELTA)
+    # ── Gate 5: minimum model confidence (calibrated for options base rate) ────
+    # In live options trading, baseline model probability is ~0.20-0.35.
+    # When strategy consensus is strong (votes >= 5 or strong setup), ML confidence
+    # should never veto macro breakouts; a safety floor of 0.10 is used.
+    if votes >= 6:
+        prob_floor = 0.10
+    elif votes >= 5:
+        prob_floor = 0.12
+    elif votes >= 4 and has_strong_setup:
+        prob_floor = 0.15
+    elif votes >= 4:
+        prob_floor = 0.20
+    else:
+        prob_floor = max(0.24, required_conf - RB_NEAR_ML_DELTA)
 
     if success_prob < prob_floor:
         return False, (

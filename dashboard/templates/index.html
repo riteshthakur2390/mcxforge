@@ -1091,9 +1091,112 @@ body > .wrap > .panel:last-child{ order:35; }
 .b-dry    { background:rgba(8,145,178,.12);   color:var(--teal); }
 
 /* ── SCROLLBARS ────────────────────────────────────────── */
-::-webkit-scrollbar{ width:3px; height:3px; }
-::-webkit-scrollbar-track{ background:transparent; }
-::-webkit-scrollbar-thumb{ background:var(--scroll-thumb); border-radius:2px; }
+/* ── GLOBAL COMMODITY SWITCHER & SIGNAL TABS ───────────────── */
+.global-commodity-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 12px 16px 4px 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  flex-wrap: wrap;
+}
+.global-switcher-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.global-switcher-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.global-tab-btn {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.global-tab-btn:hover {
+  background: rgba(255,255,255,0.09);
+  color: var(--text);
+  border-color: rgba(255,255,255,0.2);
+}
+.global-tab-btn.active {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+  box-shadow: 0 0 12px rgba(59,130,246,0.4);
+}
+.global-tab-btn[data-sym="SILVERM"].active {
+  background: #64748b;
+  border-color: #94a3b8;
+  box-shadow: 0 0 12px rgba(148,163,184,0.4);
+}
+.global-tab-btn[data-sym="GOLDM"].active {
+  background: #d97706;
+  border-color: #f59e0b;
+  box-shadow: 0 0 12px rgba(245,158,11,0.4);
+}
+.global-tab-btn[data-sym="CRUDEOILM"].active {
+  background: #dc2626;
+  border-color: #ef4444;
+  box-shadow: 0 0 12px rgba(239,68,68,0.4);
+}
+.global-tab-btn[data-sym="NATGASM"].active {
+  background: #0891b2;
+  border-color: #06b6d4;
+  box-shadow: 0 0 12px rgba(6,182,212,0.4);
+}
+.sig-tab-btn {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.sig-tab-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--text);
+}
+.sig-tab-btn.active {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+.sig-tab-btn[data-sym="SILVERM"].active {
+  background: #64748b;
+  border-color: #94a3b8;
+}
+.sig-tab-btn[data-sym="GOLDM"].active {
+  background: #d97706;
+  border-color: #f59e0b;
+}
+.sig-tab-btn[data-sym="CRUDEOILM"].active {
+  background: #dc2626;
+  border-color: #ef4444;
+}
+.sig-tab-btn[data-sym="NATGASM"].active {
+  background: #0891b2;
+  border-color: #06b6d4;
+}
 </style>
 </head>
 <body>
@@ -1120,6 +1223,18 @@ body > .wrap > .panel:last-child{ order:35; }
       <span class="ml-badge ml-active" id="ml-badge">ML ACTIVE</span>
       <span id="mode-badge" class="mode-badge mode-{{ mode }}">{{ mode }}</span>
       <div class="live-dot"><div class="dot"></div>LIVE</div>
+    </div>
+  </div>
+
+  <!-- GLOBAL COMMODITY SWITCHER -->
+  <div class="global-commodity-bar" id="global-commodity-bar">
+    <div class="global-switcher-label">LANE FOCUS:</div>
+    <div class="global-switcher-tabs" id="global-switcher-tabs">
+      <button class="global-tab-btn active" data-sym="ALL" onclick="setGlobalCommodity('ALL')">🌐 ALL PORTFOLIO</button>
+      <button class="global-tab-btn" data-sym="SILVERM" onclick="setGlobalCommodity('SILVERM')">🥈 SILVERM</button>
+      <button class="global-tab-btn" data-sym="GOLDM" onclick="setGlobalCommodity('GOLDM')">🥇 GOLDM</button>
+      <button class="global-tab-btn" data-sym="CRUDEOILM" onclick="setGlobalCommodity('CRUDEOILM')">🛢️ CRUDEOILM</button>
+      <button class="global-tab-btn" data-sym="NATGASM" onclick="setGlobalCommodity('NATGASM')">🔥 NATGASM</button>
     </div>
   </div>
 
@@ -1320,7 +1435,16 @@ body > .wrap > .panel:last-child{ order:35; }
     <div class="feature-panel" style="display:flex; flex-direction:column; height:100%; box-sizing:border-box;">
       <!-- TOP HALF (50%): EQUITY CURVE -->
       <div style="flex:1 1 0; min-height:0; display:flex; flex-direction:column;">
-        <div class="panel-head" style="margin-bottom:6px; flex:0 0 auto;">📈 Equity Curve (this month)</div>
+        <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex:0 0 auto;">
+          <span>📈 Equity Curve (<span id="eq-curve-title">Portfolio</span>)</span>
+          <div class="eq-curve-switcher" style="display:flex; gap:4px;">
+            <button id="eq-btn-all" type="button" class="badge" style="cursor:pointer; background:var(--blue); color:#fff; border:none; padding:2px 7px; border-radius:4px; font-size:10px; font-weight:700;" onclick="switchEquityCurveTab('ALL')">ALL</button>
+            <button id="eq-btn-silverm" type="button" class="badge" style="cursor:pointer; background:rgba(255,255,255,0.08); color:var(--text); border:none; padding:2px 7px; border-radius:4px; font-size:10px;" onclick="switchEquityCurveTab('SILVERM')">SILVERM</button>
+            <button id="eq-btn-goldm" type="button" class="badge" style="cursor:pointer; background:rgba(255,255,255,0.08); color:var(--text); border:none; padding:2px 7px; border-radius:4px; font-size:10px;" onclick="switchEquityCurveTab('GOLDM')">GOLDM</button>
+            <button id="eq-btn-crudeoilm" type="button" class="badge" style="cursor:pointer; background:rgba(255,255,255,0.08); color:var(--text); border:none; padding:2px 7px; border-radius:4px; font-size:10px;" onclick="switchEquityCurveTab('CRUDEOILM')">CRUDEOILM</button>
+            <button id="eq-btn-natgasm" type="button" class="badge" style="cursor:pointer; background:rgba(255,255,255,0.08); color:var(--text); border:none; padding:2px 7px; border-radius:4px; font-size:10px;" onclick="switchEquityCurveTab('NATGASM')">NATGASM</button>
+          </div>
+        </div>
         <div class="equity-box" id="equity-curve-box">
           <div class="equity-empty">No equity curve recorded this month yet.</div>
         </div>
@@ -1453,7 +1577,19 @@ body > .wrap > .panel:last-child{ order:35; }
 
     <!-- Signal Feed -->
     <div class="panel" id="signal-feed-panel">
-      <div class="panel-head">📡 Signal Feed</div>
+      <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span>📡 Signal Feed</span>
+          <span id="signal-feed-count" style="font-size:10px; color:var(--muted); font-weight:normal;"></span>
+        </div>
+        <div class="signal-feed-tabs" id="signal-feed-tabs" style="display:flex; gap:4px;">
+          <button class="sig-tab-btn active" data-sym="ALL" onclick="filterSignalFeed('ALL')">ALL</button>
+          <button class="sig-tab-btn" data-sym="SILVERM" onclick="filterSignalFeed('SILVERM')">SILVERM</button>
+          <button class="sig-tab-btn" data-sym="GOLDM" onclick="filterSignalFeed('GOLDM')">GOLDM</button>
+          <button class="sig-tab-btn" data-sym="CRUDEOILM" onclick="filterSignalFeed('CRUDEOILM')">CRUDEOILM</button>
+          <button class="sig-tab-btn" data-sym="NATGASM" onclick="filterSignalFeed('NATGASM')">NATGASM</button>
+        </div>
+      </div>
       <div class="signal-feed" id="signal-feed">
         <div class="sig-empty">Waiting for 09:30 signal window...</div>
       </div>
@@ -1464,7 +1600,10 @@ body > .wrap > .panel:last-child{ order:35; }
 
       <!-- Open Position -->
       <div class="panel">
-        <div class="panel-head">📊 Open Position</div>
+        <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>📊 Open Positions (4 Commodities)</span>
+          <span style="font-size:10px; color:var(--muted); font-weight:normal;">SILVERM · GOLDM · CRUDEOILM · NATGASM</span>
+        </div>
         <div id="position-panel">
           <div class="pos-empty">No open position</div>
         </div>
@@ -1502,6 +1641,24 @@ body > .wrap > .panel:last-child{ order:35; }
         <div id="journal-tab-status" style="font-size:11px; font-weight:600; color:var(--cyan);">
           🔭 Mode: OBSERVE · Paper Trading Only · Zero Broker Risk · Live Orders Blocked
         </div>
+      </div>
+      <!-- 4-Commodity Isolated Journal Tabs -->
+      <div class="commodity-journal-nav" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; padding:8px; background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.06); border-radius:6px;">
+        <button id="comm-btn-all" type="button" class="bt-btn primary" onclick="switchCommodityTab('ALL')" style="font-size:11px; padding:5px 12px; font-weight:700;">
+          🌐 ALL PORTFOLIO
+        </button>
+        <button id="comm-btn-silverm" type="button" class="bt-btn" onclick="switchCommodityTab('SILVERM')" style="font-size:11px; padding:5px 12px;">
+          🥈 SILVERM
+        </button>
+        <button id="comm-btn-goldm" type="button" class="bt-btn" onclick="switchCommodityTab('GOLDM')" style="font-size:11px; padding:5px 12px;">
+          🥇 GOLDM
+        </button>
+        <button id="comm-btn-crudeoilm" type="button" class="bt-btn" onclick="switchCommodityTab('CRUDEOILM')" style="font-size:11px; padding:5px 12px;">
+          🛢️ CRUDEOILM
+        </button>
+        <button id="comm-btn-natgasm" type="button" class="bt-btn" onclick="switchCommodityTab('NATGASM')" style="font-size:11px; padding:5px 12px;">
+          🔥 NATGASM
+        </button>
       </div>
       <div class="journal-summary" id="journal-kpi-summary">
         <div class="journal-kpi">
@@ -1702,30 +1859,107 @@ function initLazySections() {
   });
 }
 
-// ── STATS UPDATE ────────────────────────────────────────────────────────────
-function updateStats(d) {
-  if (!d) return;
-  const broker = d.broker || '—';
-  const brokerEls = ['broker-badge', 'dbg-broker'];
-  brokerEls.forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = broker;
-  });
-  const wins = Number(d.wins ?? 0);
-  const losses = Number(d.losses ?? 0);
-  const closed = Number(d.closed ?? d.pipeline?.closed ?? (wins + losses));
-  const openNow = d.position ? 1 : 0;
-  const tradesTaken = Number(d.traded ?? (closed + openNow) ?? 0);
-  const rawSignals = Number(d.signals ?? d.pipeline?.raw_signals ?? 0);
-  const approved = Number(d.approved ?? d.pipeline?.approved ?? 0);
-  const suppressed = Number(d.suppressed ?? d.pipeline?.suppressed ?? 0);
-  const realizedInr = Number(d.realized_pnl ?? 0);
-  stats = { ...stats, signals: rawSignals, approved, suppressed, wins, losses, closed, pnl: Number(d.total_pnl_pct ?? 0), realized_pnl: realizedInr, traded: tradesTaken };
-  if (d.ltps || d.ltp) applyCommodityLtps(d);
+// ── GLOBAL COMMODITY SWITCHER & ISOLATION ───────────────────
+let activeGlobalCommodity = 'ALL';
+let activeSignalCommodity = 'ALL';
 
+function setGlobalCommodity(sym) {
+  activeGlobalCommodity = String(sym || 'ALL').toUpperCase();
+
+  // 1. Update master switcher buttons
+  document.querySelectorAll('#global-switcher-tabs .global-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.sym === activeGlobalCommodity);
+  });
+
+  // 2. Update Top 12 KPI cards & Active Strategy Context
+  updateTopKpisForCommodity(activeGlobalCommodity);
+
+  // 3. Synchronize Signal Feed sub-tabs
+  filterSignalFeed(activeGlobalCommodity);
+
+  // 4. Synchronize Trade Journal sub-tabs
+  switchCommodityTab(activeGlobalCommodity);
+
+  // 5. Synchronize Equity Curve switcher
+  if (typeof switchEquityCurveTab === 'function') {
+    switchEquityCurveTab(activeGlobalCommodity);
+  }
+}
+
+function getCanonicalCommodity(s) {
+  const str = String(s || '').toUpperCase().trim();
+  if (str.includes('NAT')) return 'NATGASM';
+  if (str.includes('CRUDE')) return 'CRUDEOILM';
+  if (str.includes('GOLD')) return 'GOLDM';
+  if (str.includes('SILVER')) return 'SILVERM';
+  return str || 'SILVERM';
+}
+
+function filterSignalFeed(sym) {
+  const rawTarget = String(sym || 'ALL').toUpperCase().trim();
+  activeSignalCommodity = (rawTarget === 'ALL') ? 'ALL' : getCanonicalCommodity(rawTarget);
+  document.querySelectorAll('#signal-feed-tabs .sig-tab-btn').forEach(btn => {
+    const bSym = String(btn.dataset.sym || '').toUpperCase().trim();
+    btn.classList.toggle('active', bSym === rawTarget);
+  });
+  const feed = document.getElementById('signal-feed');
+  if (!feed) return;
+  let visibleCount = 0;
+  feed.querySelectorAll('.sig-card').forEach(card => {
+    const cardSym = getCanonicalCommodity(card.dataset.symbol || '');
+    const match = (activeSignalCommodity === 'ALL' || cardSym === activeSignalCommodity);
+    card.style.display = match ? '' : 'none';
+    if (match) visibleCount++;
+  });
+  const countEl = document.getElementById('signal-feed-count');
+  if (countEl) countEl.textContent = `(${visibleCount} signals)`;
+}
+
+function updateTopKpisForCommodity(sym) {
+  const d = window.latestStatus;
+  if (!d) return;
+
+  const isAll = (!sym || sym === 'ALL');
+  const commSummary = (!isAll && window.commoditySummaries) ? window.commoditySummaries[sym] : null;
+  const commPos = (!isAll && window.latestPositions) ? window.latestPositions[sym] : (isAll ? d.position : null);
+
+  // Trades & Wins/Losses
+  let wins = Number(d.wins ?? 0);
+  let losses = Number(d.losses ?? 0);
+  let closed = Number(d.closed ?? d.pipeline?.closed ?? (wins + losses));
+  let realizedInr = Number(d.realized_pnl ?? 0);
+  let pnl = Number(d.total_pnl_pct ?? 0);
+
+  if (!isAll && commSummary) {
+    wins = Number(commSummary.wins ?? 0);
+    losses = Number(commSummary.losses ?? 0);
+    closed = Number(commSummary.trades ?? (wins + losses));
+    realizedInr = Number(commSummary.realized_pnl ?? 0);
+    pnl = Number(commSummary.pnl_pct ?? 0);
+  }
+
+  const openNow = commPos ? 1 : 0;
+  const tradesTaken = closed + openNow;
+
+  // Signal & Pipeline metrics for this symbol
   const signalRows = Array.isArray(d.signal_feed?.rows) ? d.signal_feed.rows : [];
-  const latestSignal = signalRows[0] || null;
-  const strategyRaw = latestSignal?.strategies_fired || latestSignal?.strategy_combo || d.position?.strategy || '';
+  const filteredSignals = isAll ? signalRows : signalRows.filter(r => {
+    const s = String(r.symbol || (r.signal && r.signal.symbol) || '').toUpperCase();
+    return s === sym;
+  });
+
+  const latestSignal = filteredSignals[0] || null;
+  const rawSignals = isAll ? Number(d.signals ?? d.pipeline?.raw_signals ?? filteredSignals.length) : filteredSignals.length;
+  const approved = isAll ? Number(d.approved ?? d.pipeline?.approved ?? 0) : filteredSignals.filter(r => {
+    const st = String(r.lifecycle_status || r.execution || '').toUpperCase();
+    return st === 'APPROVED' || st === 'ORDERED' || st === 'OPEN' || st === 'CLOSED';
+  }).length;
+  const suppressed = isAll ? Number(d.suppressed ?? d.pipeline?.suppressed ?? 0) : filteredSignals.filter(r => {
+    const st = String(r.lifecycle_status || '').toUpperCase();
+    return st === 'REJECTED' || st === 'SUPPRESSED' || Boolean(r.rejection_reason) || Boolean(r.suppression_reason);
+  }).length;
+
+  const strategyRaw = latestSignal?.strategies_fired || latestSignal?.strategy_combo || commPos?.strategy || '';
   const strategyList = Array.isArray(strategyRaw)
     ? strategyRaw
     : String(strategyRaw || '').split(/[|,]/).map((s) => s.trim()).filter(Boolean);
@@ -1736,44 +1970,75 @@ function updateStats(d) {
     : directionRaw.includes('PUT')
       ? 'BUY PUT'
       : openNow ? 'IN TRADE' : 'HOLD';
+
   const signalEl = document.getElementById('s-trades');
-  signalEl.textContent = currentSignal;
-  signalEl.className = 'stat-value ' + (
-    currentSignal.includes('CALL') ? 'val-green'
-    : currentSignal.includes('PUT') ? 'val-red'
-    : openNow ? 'val-amber'
-    : 'val-muted'
-  );
-  document.getElementById('s-trades-sub').textContent = latestSignal?.timestamp
-    ? `${formatIstTime(latestSignal.timestamp)} · ${approved} approved · ${rawSignals} scanned`
-    : `${approved} approved · ${rawSignals} scanned`;
+  if (signalEl) {
+    signalEl.textContent = currentSignal;
+    signalEl.className = 'stat-value ' + (
+      currentSignal.includes('CALL') ? 'val-green'
+      : currentSignal.includes('PUT') ? 'val-red'
+      : openNow ? 'val-amber'
+      : 'val-muted'
+    );
+  }
+
+  const tradesSub = document.getElementById('s-trades-sub');
+  if (tradesSub) {
+    tradesSub.textContent = latestSignal?.timestamp
+      ? `${formatIstTime(latestSignal.timestamp)} · ${approved} approved · ${rawSignals} scanned`
+      : `${approved} approved · ${rawSignals} scanned`;
+  }
 
   const activeStrategy = strategyList[0] || '—';
-  document.getElementById('s-closed').textContent = activeStrategy;
-  document.getElementById('s-closed-sub').textContent = strategyList.length
-    ? `${strategyList.length} contributors`
-    : `${wins} win · ${losses} loss`;
+  const closedEl = document.getElementById('s-closed');
+  if (closedEl) closedEl.textContent = activeStrategy;
+  const closedSub = document.getElementById('s-closed-sub');
+  if (closedSub) {
+    closedSub.textContent = strategyList.length
+      ? `${strategyList.length} contributors`
+      : `${wins} win · ${losses} loss`;
+  }
 
   const positionEl = document.getElementById('s-open');
-  positionEl.textContent = openNow ? 'OPEN' : 'FLAT';
-  positionEl.className = 'stat-value ' + (openNow ? 'val-amber' : 'val-muted');
-  document.getElementById('s-open-sub').textContent = openNow
-    ? (d.position?.option_symbol || d.position?.symbol || 'monitoring active trade')
-    : 'no active trade';
+  if (positionEl) {
+    positionEl.textContent = openNow ? 'OPEN' : 'FLAT';
+    positionEl.className = 'stat-value ' + (openNow ? 'val-amber' : 'val-muted');
+  }
+  const openSub = document.getElementById('s-open-sub');
+  if (openSub) {
+    openSub.textContent = openNow
+      ? (commPos?.option_symbol || commPos?.symbol || 'monitoring active trade')
+      : 'no active trade';
+  }
 
-  const riskText = String(d.risk_status || d.risk?.status || (openNow ? 'ACTIVE' : 'OK')).toUpperCase();
   const wr = closed ? (wins / closed * 100).toFixed(1) + '%' : '—';
+  const riskText = String(d.risk_status || d.risk?.status || (openNow ? 'ACTIVE' : 'OK')).toUpperCase();
   const wrEl = document.getElementById('s-wr');
-  wrEl.textContent = riskText;
-  wrEl.className = 'stat-value ' + (
-    riskText.includes('BLOCK') || riskText.includes('HALT') || riskText.includes('BREACH') ? 'val-red'
-    : riskText.includes('ACTIVE') || riskText.includes('WARN') ? 'val-amber'
-    : 'val-green'
-  );
-  document.getElementById('s-wr-sub').textContent = `${closed} closed · ${wr} win rate`;
+  if (wrEl) {
+    wrEl.textContent = riskText;
+    wrEl.className = 'stat-value ' + (
+      riskText.includes('BLOCK') || riskText.includes('HALT') || riskText.includes('BREACH') ? 'val-red'
+      : riskText.includes('ACTIVE') || riskText.includes('WARN') ? 'val-amber'
+      : 'val-green'
+    );
+  }
+  const wrSub = document.getElementById('s-wr-sub');
+  if (wrSub) wrSub.textContent = `${closed} closed · ${wr} win rate`;
 
-  document.getElementById('s-signals').textContent = latestSignal?.timestamp ? formatIstTime(latestSignal.timestamp) : '—';
-  document.getElementById('s-pipeline-sub').textContent = `${rawSignals} scanned · ${approved} approved · ${suppressed} blocked`;
+  const sigsEl = document.getElementById('s-signals');
+  if (sigsEl) sigsEl.textContent = latestSignal?.timestamp ? formatIstTime(latestSignal.timestamp) : '—';
+  const pipeSub = document.getElementById('s-pipeline-sub');
+  if (pipeSub) pipeSub.textContent = `${rawSignals} scanned · ${approved} approved · ${suppressed} blocked`;
+
+  const pnlEl = document.getElementById('s-pnl');
+  if (pnlEl) {
+    pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
+    pnlEl.className = 'stat-value ' + (pnl >= 0 ? 'val-green' : 'val-red');
+  }
+  const pnlSub = document.getElementById('s-pnl-sub');
+  if (pnlSub) {
+    pnlSub.textContent = `₹${realizedInr >= 0 ? '+' : ''}${Number(realizedInr).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2})} realized`;
+  }
 
   renderTradeKpis({
     tradesTaken,
@@ -1784,22 +2049,35 @@ function updateStats(d) {
     losses,
     openNow,
     wr,
-    pnl: Number(d.total_pnl_pct ?? 0),
+    pnl,
     realizedInr,
     suppressed,
   });
   renderActiveStrategyContext(strategyList, latestSignal);
+}
 
-  const pnl   = d.total_pnl_pct ?? 0;
-  const pnlEl = document.getElementById('s-pnl');
-  pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
-  pnlEl.className   = 'stat-value ' + (pnl >= 0 ? 'val-green' : 'val-red');
-  document.getElementById('s-pnl-sub').textContent = `₹${realizedInr >= 0 ? '+' : ''}${Number(realizedInr).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2})} realized`;
-  if (d.position) {
-    renderPosition(d.position);
-  } else {
-    renderNoPosition();
-  }
+// ── STATS UPDATE ────────────────────────────────────────────────────────────
+function updateStats(d) {
+  if (!d) return;
+  window.latestStatus = d;
+  window.latestPositions = d.positions || null;
+  window.commoditySummaries = d.commodity_summaries || null;
+  window.commodityEquityCurves = d.commodity_equity_curves || null;
+  window.latestEquityCurve = d.equity_curve || null;
+  if (d.ltps) window.latestLtps = d.ltps;
+  if (d.ltps || d.ltp) applyCommodityLtps(d);
+
+  const broker = d.broker || '—';
+  const brokerEls = ['broker-badge', 'dbg-broker'];
+  brokerEls.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = broker;
+  });
+
+  updateTopKpisForCommodity(activeGlobalCommodity);
+
+  renderAllPositions(d.positions, d.position);
+
   if (d.live_journal) {
     journalState.live.trades = d.live_journal.trades || [];
     journalState.live.summary = d.live_journal.summary || null;
@@ -1809,7 +2087,7 @@ function updateStats(d) {
     journalState.observe.summary = d.observe_journal.summary || null;
   }
   if (d.live_history) renderTradeHistory(d.live_history);
-  else switchJournalTab(journalState.activeTab);
+  else switchCommodityTab(activeCommodity);
 
   const ml = d.ml || {};
   const mlBadge = document.getElementById('ml-badge');
@@ -1881,7 +2159,11 @@ function updateStats(d) {
 	    document.getElementById('orb-r').textContent = orbRange;
 	  }
   renderStrategyStatus(d.strategy_status || [], d.strategy_count);
-  renderEquityCurve(d.equity_curve || {});
+  if (activeEqCommodity !== 'ALL') {
+    switchEquityCurveTab(activeEqCommodity);
+  } else {
+    renderEquityCurve(d.equity_curve || {});
+  }
   renderPipeline(d.pipeline || {});
 	}
 
@@ -2081,6 +2363,44 @@ function syncSignalFeedHeight() {
 	  `;
 	}
 
+	let activeEqCommodity = 'ALL';
+	function switchEquityCurveTab(comm) {
+	  activeEqCommodity = comm;
+	  const btns = ['ALL', 'SILVERM', 'GOLDM', 'CRUDEOILM', 'NATGASM'];
+	  btns.forEach(b => {
+	    const el = document.getElementById('eq-btn-' + b.toLowerCase());
+	    if (el) {
+	      if (b === comm) {
+	        el.style.background = 'var(--blue)';
+	        el.style.color = '#fff';
+	        el.style.fontWeight = '700';
+	      } else {
+	        el.style.background = 'rgba(255,255,255,0.08)';
+	        el.style.color = 'var(--text)';
+	        el.style.fontWeight = 'normal';
+	      }
+	    }
+	  });
+
+	  const titleEl = document.getElementById('eq-curve-title');
+	  if (titleEl) {
+	    titleEl.textContent = comm === 'ALL' ? 'Portfolio' : comm;
+	  }
+
+	  if (comm !== 'ALL' && window.commodityEquityCurves && window.commodityEquityCurves[comm]) {
+	    const eqData = window.commodityEquityCurves[comm];
+	    const pts = eqData.history || [];
+	    const labels = pts.map(p => p.date);
+	    const startCap = Number(eqData.starting_capital || 100000);
+	    const values = pts.map(p => ((Number(p.ending_capital) - startCap) / startCap) * 100);
+	    renderEquityCurve({ labels, values });
+	  } else if (window.latestEquityCurve) {
+	    renderEquityCurve(window.latestEquityCurve);
+	  } else {
+	    renderEquityCurve({ labels: [], values: [] });
+	  }
+	}
+
 	function renderPipeline(pipeline) {
 	  const stack = document.getElementById('pipeline-stack');
 	  if (!stack) return;
@@ -2255,6 +2575,11 @@ function addSignalCard(d, status = '') {
   const card = document.createElement('div');
   card.className = 'sig-card sig-' + (isCall ? 'CALL' : 'PUT') + (status ? ' sig-history' : '');
   card.dataset.ts = String(signalTimeMs(d));
+  const cardCanonSym = getCanonicalCommodity(d.symbol || sig.symbol || d.contract_symbol || d.option_symbol || symLabel || opt);
+  card.dataset.symbol = cardCanonSym;
+  if (activeSignalCommodity !== 'ALL' && cardCanonSym !== activeSignalCommodity) {
+    card.style.display = 'none';
+  }
   card.innerHTML = '<div class="sig-top">' +
       '<div class="sig-dir">' + dirLabel + statusStr + '</div>' +
       '<div class="sig-time">' + ts + '</div>' +
@@ -2426,16 +2751,30 @@ function addSignalFeedSnapshot(d) {
   const rr = Number(d.risk_reward || 0);
   const lifecycle = d.lifecycle_status || d.execution || 'JOURNAL';
 
+  const sym = getCanonicalCommodity(d.symbol || (d.signal && d.signal.symbol) || d.contract_symbol || d.option_symbol || '');
+  const symBadgeColors = {
+    'SILVERM': 'background:rgba(180,190,205,0.18); color:#cbd5e1; border:1px solid rgba(180,190,205,0.35);',
+    'GOLDM': 'background:rgba(234,179,8,0.18); color:#fbbf24; border:1px solid rgba(234,179,8,0.35);',
+    'CRUDEOILM': 'background:rgba(239,68,68,0.18); color:#f87171; border:1px solid rgba(239,68,68,0.35);',
+    'NATGASM': 'background:rgba(6,182,212,0.18); color:#22d3ee; border:1px solid rgba(6,182,212,0.35);',
+  };
+  const symStyle = symBadgeColors[sym] || symBadgeColors['SILVERM'];
+  const symBadge = `<span style="display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; letter-spacing:0.5px; ${symStyle}">${sym}</span>`;
+
   const card = document.createElement('div');
   card.className = `sig-card sig-${cls}`;
   card.dataset.ts = String(signalTimeMs(d));
+  card.dataset.symbol = sym;
+  if (activeSignalCommodity !== 'ALL' && sym !== activeSignalCommodity) {
+    card.style.display = 'none';
+  }
   card.innerHTML = `
     <div class="sig-top">
-      <div class="sig-dir">${isCall ? '⬆ BUY CALL' : '⬇ BUY PUT'} — ${escapeHtml(lifecycle)}</div>
+      <div class="sig-dir">${isCall ? '⬆ BUY CALL' : '⬇ BUY PUT'} — ${escapeHtml(lifecycle)} &nbsp; ${symBadge}</div>
       <div class="sig-time">${ts}</div>
     </div>
     <div class="sig-option">${escapeHtml(opt)}</div>
-    <div class="sig-meta">${escapeHtml(d.symbol || 'SILVERM')} ${Number(d.underlying_price || d.price || d.nifty_price || 0) > 0 ? Number(d.underlying_price || d.price || d.nifty_price).toFixed(2) : '—'} &nbsp;|&nbsp; Votes ${d.votes ?? 0} &nbsp;|&nbsp; Rank ${rank ? rank.toFixed(2) : '—'} &nbsp;|&nbsp; Conf ${Math.round(conf * 100)}% &nbsp;|&nbsp; Budget ${escapeHtml(String(d.budget_lane || 'FULL').toUpperCase())}</div>
+    <div class="sig-meta">${escapeHtml(sym)} ${Number(d.underlying_price || d.price || d.nifty_price || 0) > 0 ? Number(d.underlying_price || d.price || d.nifty_price).toFixed(2) : '—'} &nbsp;|&nbsp; Votes ${d.votes ?? 0} &nbsp;|&nbsp; Rank ${rank ? rank.toFixed(2) : '—'} &nbsp;|&nbsp; Conf ${Math.round(conf * 100)}% &nbsp;|&nbsp; Budget ${escapeHtml(String(d.budget_lane || 'FULL').toUpperCase())}</div>
     <div class="sig-meta">Setup ${escapeHtml(d.setup_type || '—')} (${Number(d.setup_strength || 0).toFixed(2)}) &nbsp;|&nbsp; Bias ${escapeHtml(d.structure_bias || '—')} &nbsp;|&nbsp; Regime ${escapeHtml(d.regime || d.market_regime || '—')}</div>
     ${entry > 0 ? `<div class="sig-meta">${String(opt).toUpperCase().includes('FUT') ? 'Entry' : 'Premium'} ₹${entry.toFixed(1)} | SL ₹${Number(d.sl_premium || d.sl_price || 0).toFixed(1)} | Target ₹${Number(d.target_premium || d.target_price || 0).toFixed(1)}${rr ? ` | RR 1:${rr.toFixed(2)}` : ''}</div>` : ''}
     <div class="sig-meta">${escapeHtml(strategies || '—')}</div>
@@ -2495,6 +2834,7 @@ function applyDashboardSnapshot(data) {
   }
   switchJournalTab(journalState.activeTab);
   updateStats(data);
+  filterSignalFeed(activeSignalCommodity);
   syncSignalFeedHeight();
   if (!signalRows.length) {
     const feed = document.getElementById('signal-feed');
@@ -2555,12 +2895,26 @@ function addSuppression(d) {
     ? `Burst: ${burst.count} consecutive ${regime} suppressions since ${burst.startLabel}`
     : `Burst: first ${regime} suppression in this run`;
 
+  const sym = getCanonicalCommodity(d.symbol || (d.signal && d.signal.symbol) || d.contract_symbol || d.option_symbol || '');
+  const symBadgeColors = {
+    'SILVERM': 'background:rgba(180,190,205,0.18); color:#cbd5e1; border:1px solid rgba(180,190,205,0.35);',
+    'GOLDM': 'background:rgba(234,179,8,0.18); color:#fbbf24; border:1px solid rgba(234,179,8,0.35);',
+    'CRUDEOILM': 'background:rgba(239,68,68,0.18); color:#f87171; border:1px solid rgba(239,68,68,0.35);',
+    'NATGASM': 'background:rgba(6,182,212,0.18); color:#22d3ee; border:1px solid rgba(6,182,212,0.35);',
+  };
+  const symStyle = symBadgeColors[sym] || symBadgeColors['SILVERM'];
+  const symBadge = `<span style="display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; letter-spacing:0.5px; ${symStyle}">${sym}</span>`;
+
   const card = document.createElement('div');
   card.className = 'sig-card sig-SUPP';
   card.dataset.ts = String(signalTimeMs(d));
+  card.dataset.symbol = sym;
+  if (activeSignalCommodity !== 'ALL' && sym !== activeSignalCommodity) {
+    card.style.display = 'none';
+  }
   card.innerHTML = `
     <div class="sig-top">
-      <div class="sig-dir">🔇 SIGNAL SUPPRESSED</div>
+      <div class="sig-dir">🔇 SIGNAL SUPPRESSED &nbsp; ${symBadge}</div>
       <div class="sig-time">${ts}</div>
     </div>
     <div class="sig-option">${regime}</div>
@@ -2591,64 +2945,106 @@ function skipTrade(btn) {
 
 // ── POSITION ─────────────────────────────────────────────────────────────────
 function renderNoPosition() {
+  renderAllPositions(null, null);
+}
+
+function renderAllPositions(positionsData, singlePos) {
   const panel = document.getElementById('position-panel');
   if (!panel) return;
-  panel.innerHTML = '<div class="pos-empty">No open position</div>';
+  const commodities = [
+    { key: 'SILVERM', name: 'SILVERM', icon: '🥈' },
+    { key: 'GOLDM', name: 'GOLDM', icon: '🥇' },
+    { key: 'CRUDEOILM', name: 'CRUDEOILM', icon: '🛢️' },
+    { key: 'NATGASM', name: 'NATGASM', icon: '🔥' }
+  ];
+
+  let html = '<div class="multi-pos-grid" style="display:flex; flex-direction:column; gap:8px;">';
+
+  commodities.forEach(c => {
+    let p = positionsData ? (positionsData[c.key] || positionsData[c.key.replace('M', '')]) : null;
+    if (!p && positionsData && typeof positionsData === 'object') {
+      for (const [k, val] of Object.entries(positionsData)) {
+        if (val && getCanonicalCommodity(k) === c.key) {
+          p = val;
+          break;
+        }
+      }
+    }
+    if (!p && singlePos && (singlePos.is_open || singlePos.option_symbol)) {
+      const sym = getCanonicalCommodity(singlePos.option_symbol || singlePos.symbol || '');
+      if (sym === c.key) {
+        p = singlePos;
+      }
+    }
+
+    if (p && (p.is_open || p.entry_premium)) {
+      const pnl = Number(p.pnl_pct ?? 0);
+      const current = Number(p.current_ltp ?? p.current_premium ?? p.entry_premium ?? 0);
+      const entry = Number(p.entry_premium ?? 0);
+      const sl = Number(p.sl_premium ?? 0);
+      const target = Number(p.target_premium ?? 0);
+      const qty = Number(p.quantity ?? 0);
+      html += `
+        <div class="pos-card" style="border-left: 3px solid ${pnl >= 0 ? 'var(--green)' : 'var(--red)'}; padding:10px; border-radius:6px; background:rgba(255,255,255,0.02);">
+          <div class="pos-header" style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-weight:700; font-size:12px; display:flex; align-items:center; gap:6px;">
+              <span>${c.icon} ${c.name}</span>
+              <span class="badge" style="background:rgba(16,185,129,0.2); color:var(--green); font-size:9px; padding:1px 5px; border-radius:3px;">ACTIVE</span>
+              <span style="font-size:10px; color:var(--muted);">${p.option_symbol || ''}</span>
+            </div>
+            <div class="pos-pnl ${pnl >= 0 ? 'pos' : 'neg'}" style="font-weight:700;">${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}%</div>
+          </div>
+          <div class="pos-levels" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-top:8px; font-size:11px;">
+            <div><div class="pos-lv-label">ENTRY</div><div>₹${entry > 0 ? entry.toFixed(1) : '—'}</div></div>
+            <div><div class="pos-lv-label">CURRENT</div><div class="pos-lv-val cur">₹${current > 0 ? current.toFixed(1) : '—'}</div></div>
+            <div><div class="pos-lv-label">STOP LOSS</div><div class="pos-lv-val sl">₹${sl > 0 ? sl.toFixed(1) : '—'}</div></div>
+            <div><div class="pos-lv-label">TARGET</div><div class="pos-lv-val tgt">₹${target > 0 ? target.toFixed(1) : '—'}</div></div>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+            <div class="sig-meta" style="font-size:10px;">Qty ${qty} | ${escapeHtml(p.direction || '')}</div>
+            <button class="exit-btn" style="padding:3px 10px; font-size:10px;" onclick="socket.emit('manual_exit', {symbol: '${c.key}'})">⏹ MANUAL EXIT</button>
+          </div>
+        </div>
+      `;
+    } else {
+      const commLtp = window.latestLtps && window.latestLtps[c.key] ? ` · ₹${Number(window.latestLtps[c.key]).toLocaleString('en-IN')}` : '';
+      html += `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:rgba(255,255,255,0.015); border:1px solid rgba(255,255,255,0.05); border-radius:6px; font-size:11px;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span>${c.icon}</span>
+            <span style="font-weight:700; color:var(--text);">${c.name}</span>
+            <span style="color:var(--muted); font-size:10px;">${commLtp}</span>
+          </div>
+          <div style="color:var(--muted); font-style:italic; font-size:10px;">No open position (FLAT)</div>
+        </div>
+      `;
+    }
+  });
+
+  html += '</div>';
+  panel.innerHTML = html;
 }
 
 function renderPosition(d) {
-  if (!d) {
-    renderNoPosition();
-    return;
+  if (window.latestPositions) {
+    renderAllPositions(window.latestPositions, d);
+  } else {
+    renderAllPositions(null, d);
   }
-  const pnl = Number(d.pnl_pct ?? 0);
-  const current = Number(d.current_ltp ?? d.current_premium ?? d.entry_premium ?? 0);
-  const entry = Number(d.entry_premium ?? 0);
-  const sl = Number(d.sl_premium ?? 0);
-  const target = Number(d.target_premium ?? 0);
-  const qty = Number(d.quantity ?? 0);
-  const source = d.source === 'persisted_journal'
-    ? 'Restored from journal'
-    : (d.execution_mode || d.execution || 'Live position');
-  document.getElementById('position-panel').innerHTML = `
-    <div class="pos-card">
-      <div class="pos-header">
-        <div class="pos-symbol">${d.option_symbol??'—'}
-          ${(d.simulated || d.is_simulated) ? '<span style="font-size:9px;color:var(--muted)">(SIM)</span>' : ''}
-        </div>
-        <div class="pos-pnl ${pnl>=0?'pos':'neg'}">${pnl>=0?'+':''}${pnl.toFixed(1)}%</div>
-      </div>
-      <div class="sig-meta">${escapeHtml(source)}${qty ? ` | Qty ${qty}` : ''}${d.direction ? ` | ${escapeHtml(d.direction)}` : ''}</div>
-      <div class="pos-levels">
-        <div>
-          <div class="pos-lv-label">ENTRY</div>
-          <div>₹${entry > 0 ? entry.toFixed(1) : '—'}</div>
-        </div>
-        <div>
-          <div class="pos-lv-label">CURRENT</div>
-          <div class="pos-lv-val cur">₹${current > 0 ? current.toFixed(1) : '—'}</div>
-        </div>
-        <div>
-          <div class="pos-lv-label">STOP LOSS</div>
-          <div class="pos-lv-val sl">₹${sl > 0 ? sl.toFixed(1) : '—'}</div>
-        </div>
-      </div>
-      <div class="pos-levels">
-        <div>
-          <div class="pos-lv-label">TARGET</div>
-          <div class="pos-lv-val tgt">₹${target > 0 ? target.toFixed(1) : '—'}</div>
-        </div>
-      </div>
-      <button class="exit-btn" onclick="socket.emit('manual_exit')">⏹ MANUAL EXIT</button>
-    </div>`;
 }
 
 function onPositionClosed(d) {
   addSignalCard(d, 'CLOSED');
-  addSignalCard(d, 'CLOSED');
-  const pnl = d.pnl_pct ?? 0;
-  document.getElementById('position-panel').innerHTML =
-    `<div class="pos-empty">${pnl>=0?'🟢':'🔴'} Closed — ${d.exit_reason} | P&L: ${pnl>=0?'+':''}${pnl.toFixed(1)}%</div>`;
+  if (d && d.positions) window.latestPositions = d.positions;
+  else if (window.latestPositions) {
+    const sym = String(d.option_symbol || d.symbol || '').toUpperCase();
+    ['SILVERM', 'GOLDM', 'CRUDEOILM', 'NATGASM'].forEach(k => {
+      if (sym.includes(k) || (k === 'CRUDEOILM' && sym.includes('CRUDE')) || (k === 'NATGASM' && sym.includes('NAT'))) {
+        window.latestPositions[k] = null;
+      }
+    });
+  }
+  renderAllPositions(window.latestPositions, null);
   socket.emit('request_status');
 }
 
@@ -2773,6 +3169,85 @@ let journalState = {
   observe: { trades: [], summary: null }
 };
 
+let activeCommodity = 'ALL';
+
+function switchCommodityTab(comm) {
+  activeCommodity = comm;
+  const btns = ['ALL', 'SILVERM', 'GOLDM', 'CRUDEOILM', 'NATGASM'];
+  btns.forEach(b => {
+    const el = document.getElementById('comm-btn-' + b.toLowerCase());
+    if (el) {
+      if (b === comm) {
+        el.className = 'bt-btn primary';
+        el.style.background = 'var(--cyan)';
+        el.style.color = '#000';
+        el.style.fontWeight = 'bold';
+      } else {
+        el.className = 'bt-btn';
+        el.style.background = 'rgba(255,255,255,0.06)';
+        el.style.color = 'var(--text)';
+        el.style.fontWeight = 'normal';
+      }
+    }
+  });
+
+  const titleEl = document.getElementById('journal-section-title');
+  if (titleEl) {
+    if (comm === 'ALL') {
+      titleEl.innerHTML = journalState.activeTab === 'observe'
+        ? '🔭 OBSERVE TRADE JOURNAL &amp; ACCOUNT SUMMARY <span style="font-size:10px; color:var(--cyan); margin-left:8px;">[ALL COMMODITIES]</span>'
+        : '📒 LIVE TRADE JOURNAL &amp; ACCOUNT SUMMARY <span style="font-size:10px; color:var(--green); margin-left:8px;">[ALL COMMODITIES]</span>';
+    } else {
+      titleEl.innerHTML = journalState.activeTab === 'observe'
+        ? `🔭 OBSERVE TRADE JOURNAL &amp; ACCOUNT SUMMARY [ACTIVE PAPER TRADING] for ${comm}`
+        : `📒 LIVE TRADE JOURNAL &amp; ACCOUNT SUMMARY [MCX LIVE] for ${comm}`;
+    }
+  }
+
+  const isObs = journalState.activeTab === 'observe';
+  const curData = isObs ? (journalState.observe || {}) : (journalState.live || {});
+  let commSummary = null;
+  let commTrades = curData.trades || [];
+
+  if (isObs && window.commoditySummaries && window.commoditySummaries[comm]) {
+    commSummary = window.commoditySummaries[comm].summary ? (window.commoditySummaries[comm].summary.all || window.commoditySummaries[comm].summary) : null;
+    commTrades = window.commoditySummaries[comm].trades || [];
+  } else if (comm === 'ALL') {
+    commSummary = curData.summary;
+    commTrades = curData.trades || [];
+  } else {
+    commTrades = (curData.trades || []).filter(t => {
+      const s = String(t.symbol || t.option_symbol || '').toUpperCase();
+      if (comm === 'SILVERM') return s.includes('SILVER');
+      if (comm === 'GOLDM') return s.includes('GOLD');
+      if (comm === 'CRUDEOILM') return s.includes('CRUDE');
+      if (comm === 'NATGASM') return s.includes('NAT');
+      return false;
+    });
+    const gross = commTrades.reduce((acc, t) => acc + Number(t.gross_pnl_inr || 0), 0);
+    const charges = commTrades.reduce((acc, t) => acc + Number(t.total_charges || 0), 0);
+    const net = commTrades.reduce((acc, t) => acc + Number(t.net_pnl_inr || t.realized_pnl || 0), 0);
+    const wins = commTrades.filter(t => Number(t.net_pnl_inr || t.realized_pnl || 0) > 0).length;
+    const losses = commTrades.filter(t => Number(t.net_pnl_inr || t.realized_pnl || 0) < 0).length;
+    commSummary = {
+      starting_capital: 100000,
+      deployed_capital: 100000,
+      current_equity: 100000 + net,
+      account_roi_pct: (net / 100000) * 100,
+      closed_trades: commTrades.length,
+      wins: wins,
+      losses: losses,
+      win_rate: commTrades.length ? (wins / commTrades.length * 100) : 0,
+      gross_pnl: gross,
+      charges_taxes: charges,
+      net_pnl: net
+    };
+  }
+
+  renderJournalSummary(commSummary);
+  renderTradeJournal(commTrades);
+}
+
 function switchJournalTab(tab) {
   journalState.activeTab = tab;
   const btnObs = document.getElementById('tab-journal-observe');
@@ -2797,11 +3272,7 @@ function switchJournalTab(tab) {
       statusEl.innerHTML = '🔭 <strong>Active Mode: OBSERVE</strong> · Simulated Paper Trading Only · Zero Broker Risk';
       statusEl.style.color = 'var(--cyan)';
     }
-    if (titleEl) {
-      titleEl.innerHTML = '🔭 OBSERVE TRADE JOURNAL &amp; ACCOUNT SUMMARY <span style="font-size:10px; color:var(--cyan); margin-left:8px;">[ACTIVE PAPER TRADING]</span>';
-    }
-    renderJournalSummary(journalState.observe.summary);
-    renderTradeJournal(journalState.observe.trades);
+    switchCommodityTab(activeCommodity);
   } else {
     if (btnObs) {
       btnObs.className = 'bt-btn';
@@ -2826,22 +3297,18 @@ function switchJournalTab(tab) {
         statusEl.style.color = 'var(--green)';
       }
     }
-    if (titleEl) {
-      titleEl.innerHTML = '📒 LIVE TRADE JOURNAL &amp; ACCOUNT SUMMARY <span style="font-size:10px; color:var(--green); margin-left:8px;">[MCX COMMODITY LIVE]</span>';
-    }
-    renderJournalSummary(journalState.live.summary);
-    renderTradeJournal(journalState.live.trades);
+    switchCommodityTab(activeCommodity);
   }
 }
 
 function renderJournalSummary(summary) {
   if (!summary) {
     const elStartCap = document.getElementById('j-start-cap');
-    if (elStartCap) elStartCap.textContent = '₹200,000.00';
+    if (elStartCap) elStartCap.textContent = activeCommodity === 'ALL' ? '₹500,000.00' : '₹100,000.00';
     const elStartSub = document.getElementById('j-start-sub');
-    if (elStartSub) elStartSub.textContent = '₹40,000 active fund';
+    if (elStartSub) elStartSub.textContent = '₹100,000 active fund';
     const elEq = document.getElementById('j-equity');
-    if (elEq) elEq.textContent = '₹200,000.00';
+    if (elEq) elEq.textContent = activeCommodity === 'ALL' ? '₹500,000.00' : '₹100,000.00';
     const elEqSub = document.getElementById('j-equity-sub');
     if (elEqSub) elEqSub.textContent = '+0.00% on account';
     const elTrades = document.getElementById('j-trades');
@@ -2863,8 +3330,9 @@ function renderJournalSummary(summary) {
     if (elChg) elChg.textContent = '₹0.00';
     return;
   }
-  const startCap = Number(summary.starting_capital !== undefined && summary.starting_capital !== null ? summary.starting_capital : 200000);
-  const activeFund = Number(summary.deployed_capital !== undefined && summary.deployed_capital !== null ? summary.deployed_capital : 40000);
+  const defaultCap = activeCommodity === 'ALL' ? 500000 : 100000;
+  const startCap = Number(summary.starting_capital !== undefined && summary.starting_capital !== null ? summary.starting_capital : defaultCap);
+  const activeFund = Number(summary.deployed_capital !== undefined && summary.deployed_capital !== null ? summary.deployed_capital : 100000);
   const grossPnl = Number(summary.gross_pnl !== undefined && summary.gross_pnl !== null ? summary.gross_pnl : (Number(summary.realized_pnl || 0) + Number(summary.total_charges || summary.charges_taxes || 0)));
   const charges = Number(summary.charges_taxes !== undefined && summary.charges_taxes !== null ? summary.charges_taxes : (summary.total_charges || 0));
   const netPnl = Number(summary.net_pnl !== undefined && summary.net_pnl !== null ? summary.net_pnl : (summary.realized_pnl !== undefined ? summary.realized_pnl : (grossPnl - charges)));
@@ -2919,6 +3387,20 @@ function formatJournalTime(val) {
   return s;
 }
 
+function formatShortTradeId(id, row) {
+  if (!id) return 'MCX-001';
+  if (!id.includes('|')) return id;
+  const sym = (row && (row.symbol || row.option_symbol)) ? String(row.symbol || row.option_symbol).split('-')[0] : 'SILVERM';
+  const dir = (row && row.direction) ? (String(row.direction).includes('PUT') || String(row.direction).includes('PE') ? 'PUT' : 'CALL') : (id.includes('PUT') ? 'PUT' : 'CALL');
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash) + id.charCodeAt(i);
+    hash |= 0;
+  }
+  const hex = Math.abs(hash).toString(16).padStart(6, '0').substring(0, 6).toUpperCase();
+  return `${sym}_${dir}_${hex}`;
+}
+
 function renderTradeJournal(trades) {
   const tbody = document.getElementById('journal-table-body');
   if (!tbody) return;
@@ -2947,7 +3429,7 @@ function renderTradeJournal(trades) {
 
     return `
       <tr>
-        <td><strong style="color:var(--cyan); font-family:monospace;">${t.trade_id || 'MCX-001'}</strong></td>
+        <td><strong style="color:var(--cyan); font-family:monospace;">${formatShortTradeId(t.trade_id, t)}</strong></td>
         <td>${t.date || 'N/A'}</td>
         <td><span style="color:var(--muted); font-size:11px; font-weight:600;">${timeRange}</span></td>
         <td><strong>${cleanSym}</strong></td>
@@ -2981,7 +3463,10 @@ async function fetchTradeHistory() {
         journalState.observe.trades = data.observe.trades || [];
         journalState.observe.summary = data.observe.summary || null;
       }
-      if (!journalState.live.trades.length && data.journal_trades && journalState.tradingMode !== 'OBSERVE') {
+      if (journalState.tradingMode === 'OBSERVE') {
+        journalState.live.trades = [];
+        journalState.live.summary = null;
+      } else if (!journalState.live.trades.length && data.journal_trades) {
         journalState.live.trades = data.journal_trades;
         journalState.live.summary = data.journal_summary;
       }
@@ -3042,7 +3527,7 @@ function addTradeHistoryRow(row, prepend=true) {
   }
 
   if ((isObs && journalState.activeTab === 'observe') || (!isObs && journalState.activeTab === 'live')) {
-    renderTradeJournal(targetDataset.trades);
+    switchCommodityTab(activeCommodity);
   }
   const normalized = {
     ...row,

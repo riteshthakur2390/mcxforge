@@ -88,17 +88,16 @@ class TimeOfDaySeasonalityStrategy(BaseCommodityStrategy):
             direction=Direction.NONE,
         )
 
-        # Check if inside high-probability time-of-day window
-        start_h = int(self.parameters.get("window_start_hour", 17))
-        start_m = int(self.parameters.get("window_start_minute", 0))
-        end_h = int(self.parameters.get("window_end_hour", 22))
-        end_m = int(self.parameters.get("window_end_minute", 0))
-
+        # Check if inside high-probability MCX time-of-day windows
+        # 1. Morning Momentum Window: 09:30 - 12:30 IST
+        # 2. European Open Window: 13:30 - 16:00 IST
+        # 3. US Session Window: 17:00 - 22:30 IST
         bar_time = ts.time()
-        start_t = time(start_h, start_m)
-        end_t = time(end_h, end_m)
+        in_morning = (time(9, 30) <= bar_time <= time(12, 30))
+        in_europe = (time(13, 30) <= bar_time <= time(16, 0))
+        in_us = (time(17, 0) <= bar_time <= time(22, 30))
 
-        if not (start_t <= bar_time <= end_t):
+        if not (in_morning or in_europe or in_us):
             return none_sig
 
         min_bars = int(self.parameters.get("momentum_ema_period", 20)) + 10
@@ -154,5 +153,5 @@ class TimeOfDaySeasonalityStrategy(BaseCommodityStrategy):
             risk_reward=rr,
             decision="TRADE",
             is_valid=True,
-            metadata={"session_window": f"{start_t}-{end_t}", "atr": atr},
+            metadata={"session_time": bar_time.strftime("%H:%M"), "atr": atr},
         )

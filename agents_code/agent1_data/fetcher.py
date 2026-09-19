@@ -66,7 +66,8 @@ class DataFetcherAgent:
         self._orb_high: float | None = None
         self._orb_low: float | None = None
         self._orb_published = False
-        self._last_published_candle_ts: datetime | None = None
+        self._last_published_candle_ts: dict[str, datetime] = {}
+        self._lane_orbs: dict[str, dict] = {}
         self._session_date = datetime.now(IST).date()
         self._latest_ltp: float = 0.0
         self._latest_aux_ltps: dict[str, float] = {}
@@ -80,6 +81,9 @@ class DataFetcherAgent:
         self._orb_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"[{self.NAME}] Initialized | broker={self.broker.broker_name.upper()}")
         self._symbol = os.getenv("COMMODITY", os.getenv("INSTRUMENT", "SILVERM")).upper()
+        self._lanes = [c.strip().upper() for c in os.getenv("COMMODITY_LANES", "SILVERM,GOLDM,CRUDEOILM,NATGASM").split(",") if c.strip()]
+        if self._symbol not in self._lanes:
+            self._lanes.insert(0, self._symbol)
         self._oi_recorder = OIRecorder(self.broker)
         self._option_volume_recorder = OptionVolumeRecorder(
             self.broker,
@@ -241,104 +245,122 @@ class DataFetcherAgent:
             published_new_candle = False
 
             if MARKET_OPEN_TIME <= now_str <= "23:45" and is_trading_day(now.date()):
-                try:
-                    df = self._fetch_candles(CANDLE_LOOKBACK)
-                    if df is not None and len(df) >= 5:
-                        self._last_df = df.copy()
+                for lane_sym in self._lanes:
+                    try:
+                        df = self._fetch_candles(CANDLE_LOOKBACK, symbol=lane_sym)
+                        if df is None or len(df) < 5:
+                            continue
                         fresh, fresh_reason = self._candles_are_fresh(df, now)
                         if not fresh:
-                            logger.debug(
-                                f"[{self.NAME}] Waiting for fresh candle | reason={fresh_reason}"
-                            )
-                        else:
+                            continue
+
+                        if lane_sym == self._symbol:
+                            self._last_df = df.copy()
                             if (not self._premarket_gap_ready) and self._premarket_gap_ready_from_df(df):
                                 await self._publish_premarket_bias()
-                            candle_close = float(df["close"].iloc[-1]) if len(df) else 0.0
-                            latest_candle_ts = df.index[-1]
-                            if latest_candle_ts.tz is None:
-                                latest_candle_ts = IST.localize(latest_candle_ts.to_pydatetime())
-                            else:
-                                latest_candle_ts = latest_candle_ts.tz_convert(IST)
 
-                            if self._last_published_candle_ts != latest_candle_ts:
-                                ltp = self._latest_ltp if self._latest_ltp > 0 else candle_close
-                                df_for_publish = self._enrich_with_option_volume(df)
-                                opt_total_latest = 0.0
-                                if "opt_total_volume" in df_for_publish.columns and len(df_for_publish):
-                                    opt_total_latest = float(
-                                        pd.to_numeric(df_for_publish["opt_total_volume"], errors="coerce")
-                                        .fillna(0.0)
-                                        .iloc[-1]
-                                    )
+                        candle_close = float(df["close"].iloc[-1]) if len(df) else 0.0
+                        latest_candle_ts = df.index[-1]
+                        if latest_candle_ts.tz is None:
+                            latest_candle_ts = IST.localize(latest_candle_ts.to_pydatetime())
+                        else:
+                            latest_candle_ts = latest_candle_ts.tz_convert(IST)
 
-                                vix_live = 0.0
-                                inst_name = self._symbol
-                                gold_ltp = self._best_effort_quote("GOLD")
-                                crude_ltp = self._best_effort_quote("CRUDEOIL")
-                                natgas_ltp = self._best_effort_quote("NATURALGAS")
-                                ltps = {
-                                    inst_name: ltp,
-                                    "SILVERM": ltp,
-                                    "SILVERMIC": ltp,
-                                    "GOLD": gold_ltp,
-                                    "CRUDEOIL": crude_ltp,
-                                    "NATURALGAS": natgas_ltp,
-                                    "NATGAS": natgas_ltp,
-                                }
+                        if self._last_published_candle_ts.get(lane_sym) != latest_candle_ts:
+                            ltp = self._best_effort_quote(lane_sym, default=candle_close)
+                            if ltp <= 0:
+                                ltp = candle_close
+                            if lane_sym == self._symbol:
+                                self._latest_ltp = ltp
 
-                                if now_str >= ORB_END_TIME and not self._orb_published:
-                                    restored_orb = await self._restore_orb_state_if_available(now)
-                                    if restored_orb:
-                                        logger.info(
-                                            f"[{self.NAME}] ORB restored from disk | "
-                                            f"H={self._orb_high} L={self._orb_low}"
-                                        )
-                                    else:
-                                        self._orb_high, self._orb_low = compute_orb(
-                                            df,
-                                            orb_start=MARKET_OPEN_TIME,
-                                            orb_end=ORB_END_TIME,
-                                        )
-                                        if self._orb_high and self._orb_low:
-                                            orb_payload = {
-                                                "symbol": self._symbol,
-                                                "orb_high": self._orb_high,
-                                                "orb_low": self._orb_low,
-                                                "orb_range": round(self._orb_high - self._orb_low, 2),
-                                                "session_date": latest_candle_ts.date().isoformat(),
-                                                "formed_at": latest_candle_ts.isoformat(),
-                                            }
-                                            self._persist_orb_state(orb_payload)
-                                            await self.bus.publish(Topic.ORB_FORMED, orb_payload, self.NAME)
-                                            self._orb_published = True
-
-                                candles_list = [
-                                    self._candle_payload_row(idx, r)
-                                    for idx, r in df_for_publish.iterrows()
-                                ]
-                                await self.bus.publish(Topic.CANDLES_READY, {
-                                    "symbol": inst_name, "timeframe": LIVE_TIMEFRAME,
-                                    "candles": candles_list, "ltp": ltp,
-                                    "ltps": ltps,
-                                    "option_volume": {},
-                                    "vix": vix_live,
-                                    "orb_high": self._orb_high, "orb_low": self._orb_low,
-                                    "broker": self.broker.broker_name,
-                                    "timestamp": latest_candle_ts.isoformat(),
-                                    "server_timestamp": now.isoformat(),
-                                }, self.NAME)
-                                self._last_published_candle_ts = latest_candle_ts
-                                published_new_candle = True
-                                logger.info(
-                                    f"[{self.NAME}] CANDLES_READY | "
-                                    f"market_ts={latest_candle_ts.strftime('%H:%M:%S')} | "
-                                    f"LTP={ltp:.2f} | close={candle_close:.2f} | "
-                                    f"opt_vol={opt_total_latest:.0f}"
+                            df_for_publish = self._enrich_with_option_volume(df) if lane_sym == self._symbol else df
+                            opt_total_latest = 0.0
+                            if "opt_total_volume" in df_for_publish.columns and len(df_for_publish):
+                                opt_total_latest = float(
+                                    pd.to_numeric(df_for_publish["opt_total_volume"], errors="coerce")
+                                    .fillna(0.0)
+                                    .iloc[-1]
                                 )
-                                # Non-blocking background persistence & enrichment
+
+                            vix_live = 0.0
+                            gold_ltp = self._best_effort_quote("GOLD")
+                            crude_ltp = self._best_effort_quote("CRUDEOIL")
+                            natgas_ltp = self._best_effort_quote("NATURALGAS")
+                            ltps = {
+                                lane_sym: ltp,
+                                self._symbol: self._latest_ltp,
+                                "SILVERM": self._latest_ltp,
+                                "SILVERMIC": self._latest_ltp,
+                                "GOLD": gold_ltp,
+                                "CRUDEOIL": crude_ltp,
+                                "NATURALGAS": natgas_ltp,
+                                "NATGAS": natgas_ltp,
+                            }
+                            for extra_lane in self._lanes:
+                                if extra_lane not in ltps:
+                                    ltps[extra_lane] = self._best_effort_quote(extra_lane)
+
+                            lane_orb = self._lane_orbs.setdefault(lane_sym, {})
+                            orb_h = lane_orb.get("orb_high")
+                            orb_l = lane_orb.get("orb_low")
+
+                            if now_str >= ORB_END_TIME and not lane_orb.get("published") and not lane_orb.get("attempted"):
+                                restored_orb = await self._restore_orb_state_if_available(now) if lane_sym == self._symbol else False
+                                if not restored_orb:
+                                    calc_h, calc_l = compute_orb(
+                                        df,
+                                        orb_start=MARKET_OPEN_TIME,
+                                        orb_end=ORB_END_TIME,
+                                    )
+                                    if calc_h and calc_l:
+                                        orb_payload = {
+                                            "symbol": lane_sym,
+                                            "orb_high": calc_h,
+                                            "orb_low": calc_l,
+                                            "orb_range": round(calc_h - calc_l, 2),
+                                            "session_date": latest_candle_ts.date().isoformat(),
+                                            "formed_at": latest_candle_ts.isoformat(),
+                                        }
+                                        self._persist_orb_state(orb_payload)
+                                        lane_orb["orb_high"] = calc_h
+                                        lane_orb["orb_low"] = calc_l
+                                        lane_orb["published"] = True
+                                        orb_h, orb_l = calc_h, calc_l
+                                        if lane_sym == self._symbol:
+                                            self._orb_high = calc_h
+                                            self._orb_low = calc_l
+                                            self._orb_published = True
+                                            await self.bus.publish(Topic.ORB_FORMED, orb_payload, self.NAME)
+                                    elif len(df) > 0 and df.index[0] >= pd.Timestamp(f"{latest_candle_ts.date()} {ORB_END_TIME}:00", tz=IST):
+                                        lane_orb["attempted"] = True
+
+                            candles_list = [
+                                self._candle_payload_row(idx, r)
+                                for idx, r in df_for_publish.iterrows()
+                            ]
+                            await self.bus.publish(Topic.CANDLES_READY, {
+                                "symbol": lane_sym, "timeframe": LIVE_TIMEFRAME,
+                                "candles": candles_list, "ltp": ltp,
+                                "ltps": ltps,
+                                "option_volume": {},
+                                "vix": vix_live,
+                                "orb_high": orb_h, "orb_low": orb_l,
+                                "broker": self.broker.broker_name,
+                                "timestamp": latest_candle_ts.isoformat(),
+                                "server_timestamp": now.isoformat(),
+                            }, self.NAME)
+                            self._last_published_candle_ts[lane_sym] = latest_candle_ts
+                            published_new_candle = True
+                            logger.info(
+                                f"[{self.NAME}] CANDLES_READY | symbol={lane_sym} | "
+                                f"market_ts={latest_candle_ts.strftime('%H:%M:%S')} | "
+                                f"LTP={ltp:.2f} | close={candle_close:.2f} | "
+                                f"opt_vol={opt_total_latest:.0f}"
+                            )
+                            if lane_sym == self._symbol:
                                 asyncio.create_task(self._async_background_enrichment(latest_candle_ts, ltp, df))
-                except Exception as e:
-                    logger.error(f"[{self.NAME}] Candle loop error: {e}")
+                    except Exception as e:
+                        logger.error(f"[{self.NAME}] Candle loop error for {lane_sym}: {e}")
             elif now_str > "23:45":
                 await asyncio.sleep(60)
                 continue
@@ -350,18 +372,22 @@ class DataFetcherAgent:
                     f"elapsed={loop_elapsed:.1f}s | now={now.strftime('%Y-%m-%d %H:%M:%S IST')}"
                 )
 
-            # Ultra-low latency scheduling:
-            # 1. If we just published a fresh candle, sleep until the next boundary.
-            # 2. If at boundary (:00, :05, :10...) and waiting for broker candle, poll every 1s (up to 45s).
-            # 3. Otherwise sleep until near the next boundary.
-            if published_new_candle:
+            # Ultra-low latency multi-commodity scheduling:
+            # 1. During boundary window (:00, :05, :10... < 45s), if ANY active lane hasn't updated, poll every 1s.
+            # 2. Once ALL active lanes have published (or boundary window expires), sleep until next boundary.
+            is_boundary_window = (now.minute % interval_minutes == 0) and (now.second < 45)
+            all_lanes_updated = False
+            if self._last_published_candle_ts and len(self._lanes) > 0:
+                published_lanes = [ts for sym, ts in self._last_published_candle_ts.items() if sym in self._lanes]
+                if len(published_lanes) >= len(self._lanes) and len(set(published_lanes)) == 1:
+                    all_lanes_updated = True
+
+            if is_boundary_window and not all_lanes_updated:
+                sleep_secs = 1.0  # Fast retry until broker releases closed candles for ALL lanes
+            elif published_new_candle:
                 sleep_secs = self._secs_to_next_candle(now)
             else:
-                is_boundary_window = (now.minute % interval_minutes == 0) and (now.second < 45)
-                if is_boundary_window:
-                    sleep_secs = 1.0  # Fast retry until broker releases closed candle
-                else:
-                    sleep_secs = min(5.0, self._secs_to_next_candle(now))
+                sleep_secs = min(5.0, self._secs_to_next_candle(now))
 
             await asyncio.sleep(sleep_secs)
 
@@ -584,7 +610,8 @@ class DataFetcherAgent:
                 logger.warning(f"[{self.NAME}] Cache maintenance error: {e}")
             await asyncio.sleep(60 * 60 * 6)
 
-    def _fetch_candles(self, n: int = 200) -> pd.DataFrame | None:
+    def _fetch_candles(self, n: int = 200, symbol: str | None = None) -> pd.DataFrame | None:
+        target_sym = (symbol or self._symbol).strip().upper()
         try:
             end = datetime.now(IST)
             buffer_days = max(5, int(n / 60) + 2)
@@ -592,7 +619,7 @@ class DataFetcherAgent:
             requested_interval = LIVE_TIMEFRAME
             source_interval = "1minute" if requested_interval == "3minute" else requested_interval
             df = self.broker.get_historical_data(
-                symbol=self._symbol, interval=source_interval,
+                symbol=target_sym, interval=source_interval,
                 from_date=start.strftime("%Y-%m-%d"),
                 to_date=end.strftime("%Y-%m-%d"),
             )
@@ -603,7 +630,7 @@ class DataFetcherAgent:
                 df = self._resample_intraday_ohlcv(df, "3min")
             return df.tail(n)
         except Exception as e:
-            logger.error(f"[{self.NAME}] _fetch_candles: {e}")
+            logger.error(f"[{self.NAME}] _fetch_candles({target_sym}): {e}")
             return None
 
     def _fetch_daily_candles(self, days: int = 30) -> pd.DataFrame | None:
@@ -728,7 +755,8 @@ class DataFetcherAgent:
         self._orb_high = None
         self._orb_low = None
         self._orb_published = False
-        self._last_published_candle_ts = None
+        self._last_published_candle_ts = {}
+        self._lane_orbs = {}
         self._last_oi_bucket = None
         self._premarket_published = False
         self._premarket_gap_ready = False

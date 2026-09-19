@@ -98,16 +98,40 @@ def run_commodity_backtest(
     if data_file:
         csv_path = Path(data_file)
     else:
+        sym_upper = sym_clean.upper()
         candidates = [
-            Path(f"data/historical/{sym_clean}_dhan_{interval_code}.csv"),
-            Path(f"data/historical/{sym_clean}_upstox_{interval_code}.csv"),
-            Path(f"data/historical/{sym_clean}_{interval_code}.csv"),
+            Path(f"data/historical/{sym_upper}_dhan_{interval_code}.csv"),
+            Path(f"data/historical/{sym_upper}_upstox_{interval_code}.csv"),
+            Path(f"data/historical/{sym_upper}_{interval_code}.csv"),
         ]
-        if sym_clean in ("SILVERM", "SILVERMIC"):
+        if "SILVER" in sym_upper:
             candidates.extend([
+                Path(f"data/historical/SILVERM_dhan_{interval_code}.csv"),
+                Path(f"data/historical/SILVERM_{interval_code}.csv"),
                 Path(f"data/historical/SILVERMIC_dhan_{interval_code}.csv"),
                 Path(f"data/historical/SILVERMIC_{interval_code}.csv"),
-                Path(f"data/historical/SILVERM_dhan_{interval_code}.csv"),
+            ])
+        elif "CRUDE" in sym_upper:
+            candidates.extend([
+                Path(f"data/historical/CRUDEOIL_dhan_{interval_code}.csv"),
+                Path(f"data/historical/CRUDEOIL_{interval_code}.csv"),
+                Path(f"data/historical/CRUDEOILM_dhan_{interval_code}.csv"),
+                Path(f"data/historical/CRUDEOILM_{interval_code}.csv"),
+            ])
+        elif "GOLD" in sym_upper:
+            candidates.extend([
+                Path(f"data/historical/GOLDM_dhan_{interval_code}.csv"),
+                Path(f"data/historical/GOLDM_{interval_code}.csv"),
+                Path(f"data/historical/GOLD_dhan_{interval_code}.csv"),
+                Path(f"data/historical/GOLD_{interval_code}.csv"),
+            ])
+        elif any(k in sym_upper for k in ("NATGAS", "NATURAL")):
+            candidates.extend([
+                Path(f"data/historical/NATGAS_dhan_{interval_code}.csv"),
+                Path(f"data/historical/NATGAS_{interval_code}.csv"),
+                Path(f"data/historical/NATGASM_dhan_{interval_code}.csv"),
+                Path(f"data/historical/NATGASMINI_dhan_{interval_code}.csv"),
+                Path(f"data/historical/NATURALGAS_dhan_{interval_code}.csv"),
             ])
         csv_path = None
         for c in candidates:
@@ -180,31 +204,49 @@ def run_commodity_backtest(
     trading_days = len(set(df_eval.index.date))
     logger.info(f"Loaded {label} from {csv_path}: {total_bars} bars over {trading_days} sessions ({df_eval.index.min()} to {df_eval.index.max()})")
 
-    # 2. Load Agent 3 Trained Commodity ML Ensemble
-    ml_path = Path("ml/saved_models/silverm_5minute.pkl") if "d" not in timeframe else Path("ml/saved_models/silverm_1h.pkl")
-    if not ml_path.exists():
-        ml_path = Path("ml/saved_models/silvermic_5minute.pkl")
+    # 2. Resolve Target Instrument Configuration & ML Model
+    active_comm = symbol or os.getenv("COMMODITY_SYMBOL", "SILVERM")
+    from instruments.registry import get_instrument_config, get_instrument_strategy_config
+    inst_cfg = get_instrument_config(active_comm)
+    inst_strat_cfg = get_instrument_strategy_config(active_comm)
+
+    sym_lower = sym_clean.lower()
+    ml_candidates = [
+        Path(f"ml/saved_models/{sym_lower}_5minute.pkl"),
+        Path(f"ml/saved_models/{sym_lower}m_5minute.pkl") if not sym_lower.endswith("m") else Path(f"ml/saved_models/{sym_lower[:-1]}_5minute.pkl"),
+    ]
+    if "crude" in sym_lower:
+        ml_candidates.extend([Path("ml/saved_models/crudeoil_5minute.pkl"), Path("ml/saved_models/crudeoilm_5minute.pkl")])
+    elif "gold" in sym_lower:
+        ml_candidates.extend([Path("ml/saved_models/goldm_5minute.pkl"), Path("ml/saved_models/gold_5minute.pkl")])
+    elif "silver" in sym_lower:
+        ml_candidates.extend([Path("ml/saved_models/silverm_5minute.pkl"), Path("ml/saved_models/silvermic_5minute.pkl")])
+    elif "natgas" in sym_lower or "natural" in sym_lower:
+        ml_candidates.extend([Path("ml/saved_models/naturalgas_5minute.pkl"), Path("ml/saved_models/natgasmini_5minute.pkl"), Path("ml/saved_models/natgasm_5minute.pkl")])
+    ml_candidates.append(Path("ml/saved_models/commodity_5minute.pkl"))
+    ml_candidates.append(Path("ml/saved_models/silverm_5minute.pkl"))
+    ml_path = next((p for p in ml_candidates if p.exists()), ml_candidates[-1])
+
     ml_ensemble = SignalForgeEnsemble()
     ml_loaded = ml_ensemble.load(ml_path)
     logger.info(f"Loaded ML model: {ml_path} (loaded={ml_loaded}, models={list(ml_ensemble.models.keys()) if ml_loaded else []})")
-
-    # 2b. Resolve Target Instrument Configuration (Default: SILVERM)
-    active_comm = symbol or os.getenv("COMMODITY_SYMBOL", "SILVERM")
-    inst_cfg = get_instrument_config(active_comm)
 
     # 3. Initialize Capital & Risk Parameters (Max Capital per Trade = 20% of Capital = ₹40,000 max)
     max_capital_per_trade = capital * (max_cap_pct / 100.0)  # ₹40,000 max (20% of ₹200,000 capital)
     max_premium_per_trade = max_capital_per_trade
     max_margin_per_trade = max_capital_per_trade
-    lot_size = inst_cfg.lot_size            # 5 kg for SILVERM
-    tick_size = inst_cfg.tick_size          # 1.0 pt
-    tick_val = inst_cfg.tick_value          # ₹5.0 / pt for SILVERM (1 lot)
+    lot_size = inst_cfg.lot_size            # Lot size from spec
+    tick_size = inst_cfg.tick_size          # Tick size
+    tick_val = inst_cfg.tick_value          # Tick value
     margin_pct = 0.15                       # Margin requirement estimate
 
     # 4. Run Backtest with Complete Telemetry & ML Scoring
     if quality_mode:
         strategies_to_use = build_quality_strategy_suite()
-        effective_min_votes = min_votes
+        enabled_names = inst_strat_cfg.get("enabled_strategies")
+        if enabled_names:
+            strategies_to_use = [s for s in strategies_to_use if getattr(s, "name", s.__class__.__name__) in enabled_names]
+        effective_min_votes = min_votes if min_votes is not None else int(inst_strat_cfg.get("min_votes", 4))
         effective_min_cats = min_categories
         if session_filter.upper() == "ALL" or "d" in timeframe:
             allowed_sessions = [MCXSession.MORNING, MCXSession.AFTERNOON, MCXSession.EVENING, MCXSession.OFF_MARKET]
@@ -214,17 +256,17 @@ def run_commodity_backtest(
             allowed_sessions = [MCXSession.MORNING, MCXSession.EVENING]
         else:
             allowed_sessions = [MCXSession.EVENING]  # US COMEX Evening Session (17:00-23:30) - High Institutional Liquidity
-        mode_label = f"Quality Alpha Suite (33 Strats | Session: {session_filter} | Min Votes {effective_min_votes} | Min Cats {effective_min_cats})"
+        mode_label = f"Quality Alpha Suite ({len(strategies_to_use)} Strats | Session: {session_filter} | Min Votes {effective_min_votes} | Min Cats {effective_min_cats})"
     else:
         strategies_to_use = build_default_strategy_suite()
-        effective_min_votes = 2
+        effective_min_votes = min_votes if min_votes is not None else 2
         effective_min_cats = 1
         allowed_sessions = (
             [MCXSession.MORNING, MCXSession.AFTERNOON, MCXSession.EVENING, MCXSession.OFF_MARKET]
             if "d" in timeframe or session_filter.upper() == "ALL"
             else ([MCXSession.EVENING] if session_filter.upper() == "EVENING" else [MCXSession.MORNING, MCXSession.AFTERNOON, MCXSession.EVENING])
         )
-        mode_label = f"Raw Baseline (All 43 Strats | Session: {session_filter} | Min Votes 2)"
+        mode_label = f"Raw Baseline (All {len(strategies_to_use)} Strats | Session: {session_filter} | Min Votes {effective_min_votes})"
 
     engine = CommodityEnsembleEngine(
         strategies=strategies_to_use,
@@ -250,7 +292,11 @@ def run_commodity_backtest(
         _dhan_broker = None
     
     _dhan_contract_cache: dict[tuple, tuple[str, str]] = {}
-    for t in raw_trades:
+    total_raw = len(raw_trades)
+    log_enrich_interval = max(25, total_raw // 5) if total_raw > 0 else 100
+    for idx_t, t in enumerate(raw_trades):
+        if idx_t > 0 and idx_t % log_enrich_interval == 0:
+            logger.info(f"Enriching trades with ML probability & option margin: {idx_t}/{total_raw} ({int(idx_t/total_raw*100)}%)...")
         # Find candle slice at entry time to extract features
         entry_ts = pd.to_datetime(t.entry_time)
         sub_df = df_eval[df_eval.index <= entry_ts].tail(60)
@@ -430,10 +476,13 @@ def run_commodity_backtest(
         })
         enriched_trades.append(t_dict)
 
-    if min_ml_conf is not None:
+    effective_min_ml_conf = min_ml_conf if min_ml_conf is not None else (
+        float(inst_strat_cfg.get("min_ml_confidence", 0.26)) if quality_mode else None
+    )
+    if effective_min_ml_conf is not None:
         before_count = len(enriched_trades)
-        enriched_trades = [tr for tr in enriched_trades if tr.get("ml_confidence", 0.0) >= min_ml_conf]
-        logger.info(f"Applied ML Confidence filter (>= {min_ml_conf}): {len(enriched_trades)} / {before_count} trades passed gatekeeper.")
+        enriched_trades = [tr for tr in enriched_trades if tr.get("ml_confidence", 0.0) >= effective_min_ml_conf]
+        logger.info(f"Applied ML Confidence filter (>= {effective_min_ml_conf:.2f}): {len(enriched_trades)} / {before_count} trades passed gatekeeper.")
 
     trade_columns = [
         "trade_id", "symbol", "direction", "entry_time", "exit_time", "entry_price", "exit_price",
@@ -936,10 +985,10 @@ if __name__ == "__main__":
     parser.add_argument("--max-cap-pct", type=float, default=20.0, help="Max capital percentage usable per trade (default: 20.0%% -> ₹40,000 on ₹200k)")
     parser.add_argument("--output-dir", type=str, default=None, help="Output directory")
     parser.add_argument("--raw", action="store_true", help="Run raw unfiltered baseline (all 43 strategies, all sessions, min votes 2)")
-    parser.add_argument("--min-votes", type=int, default=5, help="Minimum vote consensus threshold (default: 5)")
+    parser.add_argument("--min-votes", type=int, default=None, help="Minimum vote consensus threshold (default: auto from instrument registry)")
     parser.add_argument("--min-cats", "--min-categories", type=int, default=2, help="Minimum independent strategy categories (default: 2)")
     parser.add_argument("--session", type=str, default="EVENING", choices=["ALL", "EVENING", "MORNING", "SKIP_AFTERNOON"], help="Session filter (EVENING for US COMEX institutional liquidity, ALL for full day, MORNING, SKIP_AFTERNOON)")
-    parser.add_argument("--min-ml-conf", type=float, default=float(os.getenv("MIN_ML_CONF", "0.32")), help="Filter out trades below ML confidence threshold (default: 0.32)")
+    parser.add_argument("--min-ml-conf", type=float, default=None, help="Filter out trades below ML confidence threshold (default: auto from instrument registry)")
     parser.add_argument("--symbol", type=str, default="SILVERM", help="Commodity symbol to backtest (SILVERM, GOLDM, CRUDEOIL, NATGAS)")
     parser.add_argument("--telegram", action="store_true", help="Send comprehensive backtest summary report to Telegram")
     parser.add_argument("--telegram-trades", action="store_true", help="Send individual trade opened/closed alerts to Telegram")

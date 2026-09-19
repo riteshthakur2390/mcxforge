@@ -28,7 +28,7 @@ class VWAPEMACross:
             tpv        = df["tp"] * df["volume"]
             cumtpv     = tpv.groupby(df["date"]).cumsum()
             cumv       = df["volume"].groupby(df["date"]).cumsum()
-            df["vwap"] = cumtpv / cumv
+            df["vwap"] = (cumtpv / cumv.replace(0, np.nan)).ffill().fillna(df["tp"])
 
         df["ema9"] = cache.ema_9.reindex(df.index) if cache and cache.ema_9 is not None else ta.ema(df["close"], length=S2_EMA_SHORT)
         df["ema21"] = cache.ema_21.reindex(df.index) if cache and cache.ema_21 is not None else ta.ema(df["close"], length=S2_EMA_LONG)

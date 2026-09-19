@@ -304,13 +304,14 @@ class DashboardAlertAgent:
                 if last_rej_map is None:
                     self._last_rejected_telegram_ts = {}
                     last_rej_map = self._last_rejected_telegram_ts
-                last_ts = last_rej_map.get(direction, 0.0)
-                rej_cooldown = float(os.getenv("REJECTED_TELEGRAM_COOLDOWN_SEC", "1800"))
+                rej_key = f"{sym}_{direction}"
+                last_ts = last_rej_map.get(rej_key, 0.0)
+                rej_cooldown = float(os.getenv("REJECTED_TELEGRAM_COOLDOWN_SEC", "300"))
                 if now_ts - last_ts >= rej_cooldown:
-                    last_rej_map[direction] = now_ts
-                    self._telegram(text)
+                    last_rej_map[rej_key] = now_ts
+                    self._telegram(text, parse_mode=None)
                 else:
-                    logger.debug(f"[DashboardAgent] Suppressed duplicate telegram rejection alert for {direction} (cooldown {rej_cooldown}s)")
+                    logger.debug(f"[DashboardAgent] Suppressed duplicate telegram rejection alert for {rej_key} (cooldown {rej_cooldown}s)")
         except Exception as exc:
             logger.error(f"[DashboardAgent] Error sending telegram notification for rejected signal: {exc}", exc_info=True)
 
@@ -615,15 +616,15 @@ class DashboardAlertAgent:
     async def on_system_status(self, msg: Message):
         socketio.emit("system_status", self._to_json_safe(msg.payload))
 
-    def _telegram(self, text: str):
+    def _telegram(self, text: str, parse_mode: str | None = None):
         try:
             from utils.telegram_notifier import get_notifier
             import asyncio
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(get_notifier().send_text(text, target="LIVE"))
+                loop.create_task(get_notifier().send_text(text, target="LIVE", parse_mode=parse_mode))
             except RuntimeError:
-                asyncio.run(get_notifier().send_text(text, target="LIVE"))
+                asyncio.run(get_notifier().send_text(text, target="LIVE", parse_mode=parse_mode))
         except Exception as exc:
             logger.debug(f"[DashboardAgent] Error sending telegram notification: {exc}")
 
@@ -688,8 +689,9 @@ class DashboardAlertAgent:
             journal_summary = eq.get_summary()
             journal_trades = get_trade_history().rows()
             equity_curve_data = eq.get_equity_curve_data()
+            commodity_equity_curves = eq.commodity_equity_curves() if hasattr(eq, "commodity_equity_curves") else {}
         except Exception:
-            pass
+            commodity_equity_curves = {}
 
         ltps = {}
         ltp = 0.0
@@ -700,11 +702,14 @@ class DashboardAlertAgent:
             except Exception:
                 pass
 
+        positions = self._all_open_positions_payload()
+
         return {
             **stats,
             "ltp": ltp,
             "ltps": ltps,
             "position": pos,
+            "positions": positions,
             "mode": self._get_trading_mode(),
             "risk": risk,
             "ml": ml,
@@ -715,9 +720,11 @@ class DashboardAlertAgent:
             "strategy_count": len(strategy_names),
             "equity_curve": self._equity_curve_month(),
             "equity_curve_data": equity_curve_data,
+            "commodity_equity_curves": commodity_equity_curves,
             "journal_summary": journal_summary,
             "journal_trades": journal_trades,
             "live_history": history,
+            "commodity_summaries": history.get("commodity_summaries", {}),
             "alerts": self._recent_alerts_payload(limit=30).get("rows", []),
             "signal_feed": self._today_signal_feed_payload(limit=80),
             "journal_rows": journal_rows[:200],
@@ -1054,8 +1061,13 @@ class DashboardAlertAgent:
             "rows": rows[-max(1, min(int(limit or 50), 200)):],
         }
 
-    def _open_position_payload(self) -> dict | None:
-        pos = self.position_agent.get_position() if self.position_agent else None
+    def _open_position_payload(self, symbol: str | None = None) -> dict | None:
+        pos = None
+        if self.position_agent and hasattr(self.position_agent, "get_position"):
+            try:
+                pos = self.position_agent.get_position(symbol=symbol)
+            except Exception:
+                pos = self.position_agent.get_position()
         if pos:
             return {**pos, "source": "position_manager"}
 
@@ -1068,6 +1080,16 @@ class DashboardAlertAgent:
             option_symbol = str(row.get("option_symbol", "") or "")
             if not option_symbol:
                 continue
+            if symbol and symbol.strip().upper() not in ("", "ALL"):
+                sym_clean = symbol.strip().upper()
+                prefixes = [sym_clean]
+                if "SILVER" in sym_clean: prefixes = ["SILVERM", "SILVERMIC", "SILVER"]
+                elif "GOLD" in sym_clean: prefixes = ["GOLDM", "GOLD"]
+                elif "CRUDE" in sym_clean: prefixes = ["CRUDEOILM", "CRUDEOIL", "CRUDE"]
+                elif "NAT" in sym_clean: prefixes = ["NATGASM", "NATGASMINI", "NATGAS", "NATURALGAS"]
+                if not any(p in option_symbol.upper() or p in str(row.get("symbol", "")).upper() for p in prefixes):
+                    continue
+
             entry = self._safe_float(row.get("actual_premium") or row.get("entry_premium") or row.get("est_premium"))
             return {
                 "option_symbol": option_symbol,
@@ -1093,6 +1115,10 @@ class DashboardAlertAgent:
             }
         return None
 
+    def _all_open_positions_payload(self) -> dict[str, dict | None]:
+        commodities = ["SILVERM", "GOLDM", "CRUDEOILM", "NATGASM"]
+        return {c: self._open_position_payload(symbol=c) for c in commodities}
+
     def _live_trade_history_payload(self, rows: list[dict] | None = None) -> dict:
         try:
             from utils.live_trade_history import get_live_trade_history, get_observe_trade_history
@@ -1114,6 +1140,7 @@ class DashboardAlertAgent:
                 },
                 "summary": obs_hist.summary() if current_mode == "OBSERVE" else live_hist.summary(),
                 "recent_trades": obs_hist.rows(limit=50) if current_mode == "OBSERVE" else live_hist.rows(limit=50),
+                "commodity_summaries": obs_hist.commodity_summaries() if current_mode == "OBSERVE" else live_hist.commodity_summaries(),
             }
         except Exception as exc:
             logger.debug(f"[{self.NAME}] Live trade history unavailable: {exc}")
@@ -1193,18 +1220,23 @@ class DashboardAlertAgent:
         )
         return rows[:max(1, min(int(limit or 100), 500))]
 
-    def _today_signal_feed_payload(self, limit: int = 50) -> dict:
+    def _today_signal_feed_payload(self, limit: int = 50, symbol: str | None = None) -> dict:
         max_rows = max(1, min(int(limit or 50), 200))
-        rows = self._today_journal_rows(limit=max_rows)
+        rows = self._today_journal_rows(limit=max_rows * 2)
+        if symbol and symbol.strip().upper() != "ALL":
+            target_sym = symbol.strip().upper()
+            rows = [r for r in rows if str(r.get("symbol") or "").upper() == target_sym]
         latest = self._latest_signal_feed_row()
         if latest:
-            latest_key = str(latest.get("signal_id") or latest.get("timestamp") or "")
-            existing_keys = {
-                str(row.get("signal_id") or row.get("timestamp") or "")
-                for row in rows
-            }
-            if latest_key and latest_key not in existing_keys:
-                rows = [latest, *rows]
+            latest_sym = str(latest.get("symbol") or "").upper()
+            if not symbol or symbol.strip().upper() == "ALL" or latest_sym == symbol.strip().upper():
+                latest_key = str(latest.get("signal_id") or latest.get("timestamp") or "")
+                existing_keys = {
+                    str(row.get("signal_id") or row.get("timestamp") or "")
+                    for row in rows
+                }
+                if latest_key and latest_key not in existing_keys:
+                    rows = [latest, *rows]
         rows.sort(
             key=lambda row: str(row.get("timestamp") or row.get("entry_time") or row.get("date") or ""),
             reverse=True,
@@ -1863,11 +1895,13 @@ class DashboardAlertAgent:
         @app.route("/api/signals/today")
         def today_signals():
             try:
+                sym_filter = request.args.get("symbol")
                 return jsonify(self._to_json_safe(
-                self._today_signal_feed_payload(
-                    limit=max(1, min(int(request.args.get("limit", 50)), 200))
-                )
-            ))
+                    self._today_signal_feed_payload(
+                        limit=max(1, min(int(request.args.get("limit", 50)), 200)),
+                        symbol=sym_filter,
+                    )
+                ))
             except Exception as exc:
                 logger.error(f"[{self.NAME}] Today signals error: {exc}")
                 return jsonify({"error": str(exc)}), 500
@@ -2417,10 +2451,14 @@ class DashboardAlertAgent:
             asyncio.run(self.bus.publish(Topic.ORDER_CONFIRM_REQ, data, "dashboard_user"))
 
         @socketio.on("manual_exit")
-        def on_exit():
+        def on_exit(data=None):
             import asyncio
             if self.position_agent:
-                asyncio.run(self.position_agent.manual_exit())
+                sym = data.get("symbol") if isinstance(data, dict) else None
+                try:
+                    asyncio.run(self.position_agent.manual_exit(symbol=sym))
+                except TypeError:
+                    asyncio.run(self.position_agent.manual_exit())
 
         @socketio.on("reset_strategies")
         def on_reset_strategies():

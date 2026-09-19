@@ -59,6 +59,34 @@ class MarketContextGate:
     def __init__(self, bus=None) -> None:
         self.bus = bus
         self.engine = get_market_intelligence_engine()
+        self._active_positions: dict[str, str] = {}
+
+    @staticmethod
+    def _canonical(sym_raw: Any) -> str:
+        s = str(sym_raw or "").upper()
+        if "SILVERM" in s or "SILVERMIC" in s or "SILVER" in s:
+            return "SILVERM"
+        if "GOLDM" in s or "GOLD" in s:
+            return "GOLDM"
+        if "CRUDEOILM" in s or "CRUDE" in s:
+            return "CRUDEOILM"
+        if "NATGASM" in s or "NATURALGAS" in s or "NATGAS" in s:
+            return "NATGASM"
+        return s
+
+    async def _on_pos_opened(self, msg) -> None:
+        p = getattr(msg, "payload", {}) or {}
+        sym = self._canonical(p.get("symbol") or p.get("option_symbol") or "")
+        sig = p.get("signal") or {}
+        dir_val = str(p.get("direction") or (sig.get("direction") if isinstance(sig, dict) else getattr(sig, "direction", "")) or "").upper()
+        if sym and dir_val:
+            self._active_positions[sym] = dir_val
+
+    async def _on_pos_closed(self, msg) -> None:
+        p = getattr(msg, "payload", {}) or {}
+        sym = self._canonical(p.get("symbol") or p.get("option_symbol") or "")
+        if sym:
+            self._active_positions.pop(sym, None)
 
     def register(self) -> None:
         if self.bus is None:
@@ -68,8 +96,11 @@ class MarketContextGate:
             except Exception:
                 return
         self.bus.subscribe(Topic.RAW_SIGNAL, self.on_raw_signal)
+        self.bus.subscribe(Topic.ORDER_PLACED, self._on_pos_opened)
+        self.bus.subscribe(Topic.ORDER_DRY_RUN, self._on_pos_opened)
+        self.bus.subscribe(Topic.POSITION_CLOSED, self._on_pos_closed)
         logger.info(f"[{self.NAME}] Registered — Market Intelligence Engine active with "
-                    f"{len(self.engine._plugins)} plugins")
+                    f"{len(self.engine._plugins)} plugins (Cross-Asset Correlation Guard active)")
 
     async def on_raw_signal(self, msg) -> None:
         payload = dict(msg.payload)
@@ -86,6 +117,23 @@ class MarketContextGate:
         payload["trade_quality_band"] = report.quality_band
         curr_symbol = str(payload.get("symbol") or os.getenv("INSTRUMENT", "SILVERM"))
         payload["signal_output"] = report.to_signal_output(curr_symbol)
+
+        # ── Cross-Asset Correlation Guard (GOLDM & SILVERM) ───────────────────
+        curr_canonical = self._canonical(curr_symbol)
+        curr_dir = str(payload.get("direction", "") or "").upper()
+        corr_pair = "SILVERM" if curr_canonical == "GOLDM" else ("GOLDM" if curr_canonical == "SILVERM" else None)
+        if corr_pair and corr_pair in self._active_positions:
+            active_dir = self._active_positions[corr_pair]
+            if active_dir == curr_dir:
+                votes = int(payload.get("votes", 0) or 0)
+                ml_score = float(payload.get("ml_rank_score", payload.get("confidence", 0.0)) or 0.0)
+                if not (votes >= 6 and ml_score >= 0.70):
+                    report.suppressed = True
+                    report.suppression_reason = (
+                        f"Correlation guard: {corr_pair} already holds active {active_dir}. "
+                        f"Suppressing {curr_canonical} to prevent unhedged double metals drawdown "
+                        f"(requires votes>=6 & score>=0.70, current votes={votes}, score={ml_score:.2f})"
+                    )
 
         # ── Context Alignment Score (CAS) ─────────────────────────────────────
         try:

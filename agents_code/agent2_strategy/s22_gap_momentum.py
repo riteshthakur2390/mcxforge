@@ -54,11 +54,11 @@ class GapMomentumStrategy:
     def _evaluate(self, df: pd.DataFrame, kwargs: dict) -> dict:
         none = {"direction": Direction.NONE, "confidence": 0.0, "name": self.name}
 
-        # Time gate: 09:15 - 10:30 only (after first 15m candle formed at 09:00 open)
+        # Time gate: 09:00 - 12:30 IST (morning gap momentum window)
         ts = df.index[-1]
         try:
             total_min = ts.hour * 60 + ts.minute
-            if not (9*60+15 <= total_min <= 10*60+30):
+            if not (9*60 <= total_min <= 12*60+30):
                 return none
         except Exception:
             return none
@@ -84,9 +84,9 @@ class GapMomentumStrategy:
             return none
         gap_est = (first_open - prev_close) / prev_close * 100
 
-        # Gap direction
-        gap_up   = gap_est > 0.3
-        gap_down = gap_est < -0.3
+        # Gap direction (0.20% meaningful move in commodities)
+        gap_up   = gap_est > 0.20
+        gap_down = gap_est < -0.20
 
         if not gap_up and not gap_down:
             return none

@@ -33,7 +33,7 @@ class BollingerBandMeanReversionStrategy(BaseCommodityStrategy):
             "bb_period": 20,
             "bb_std": 2.0,
             "adx_period": 14,
-            "adx_threshold": 20.0,      # Only fade when ADX < 20 (ranging market)
+            "adx_threshold": 28.0,      # Fade extreme band touches even in moderate trends
             "rsi_period": 14,
             "rsi_oversold": 35.0,
             "rsi_overbought": 65.0,
@@ -44,7 +44,7 @@ class BollingerBandMeanReversionStrategy(BaseCommodityStrategy):
         super().__init__(
             name="BBMeanReversion",
             version="1.0.0",
-            permitted_regimes=[MarketRegime.RANGE, MarketRegime.LOW_VOLATILITY],
+            permitted_regimes=[MarketRegime.RANGE, MarketRegime.LOW_VOLATILITY, MarketRegime.TREND],
             default_parameters=default_params,
         )
         if parameters:
@@ -142,8 +142,8 @@ class BollingerBandMeanReversionStrategy(BaseCommodityStrategy):
         rsi_os = float(self.parameters.get("rsi_oversold", 35.0))
         rsi_ob = float(self.parameters.get("rsi_overbought", 65.0))
 
-        # Filter: market must not be strongly trending (ADX < threshold)
-        if adx > adx_thresh + 5.0:
+        # Filter: market must not be an extreme runaway trend (ADX <= 35)
+        if adx > 35.0:
             return none_sig
 
         sig_dir = Direction.NONE

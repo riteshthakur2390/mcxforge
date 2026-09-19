@@ -275,11 +275,11 @@ def extract(
     # ── NEW: Trend persistence count ──────────────────────────────────────────
     try:
         closes = w["close"].values
-        direction = 1 if closes[-1] > closes[-2] else -1
+        last_bar_dir = 1 if closes[-1] > closes[-2] else -1
         count = 1
         for i in range(2, min(len(closes), 10)):
             d = 1 if closes[-i] > closes[-i - 1] else -1
-            if d == direction:
+            if d == last_bar_dir:
                 count += 1
             else:
                 break
@@ -380,7 +380,8 @@ def extract(
     # ── 8. SIGNAL META ────────────────────────────────────────────────────────
     f["strategy_conf"] = float(conf)
     f["votes"]         = int(votes)
-    f["is_call"]       = int(direction == "BUY_CALL")
+    dir_str = str(direction).upper()
+    f["is_call"]       = 1.0 if any(k in dir_str for k in ("CALL", "BUY", "LONG")) and "PUT" not in dir_str else 0.0
 
     # ── CLEAN: replace NaN/Inf ────────────────────────────────────────────────
     cleaned = {}

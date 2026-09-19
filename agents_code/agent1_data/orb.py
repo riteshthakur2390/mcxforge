@@ -47,10 +47,16 @@ def compute_orb(
     orb_df = df[(idx >= t_start) & (idx < t_end)]
 
     if len(orb_df) < 2:
-        logger.warning(
-            f"[ORB] Not enough candles in window "
-            f"{orb_start}{orb_end}: got {len(orb_df)}"
-        )
+        if len(idx) > 0 and idx[0] >= t_end:
+            logger.debug(
+                f"[ORB] Candle buffer starts at {idx[0].strftime('%H:%M')} "
+                f"after window {orb_start}-{orb_end}; skipping"
+            )
+        else:
+            logger.warning(
+                f"[ORB] Not enough candles in window "
+                f"{orb_start}-{orb_end}: got {len(orb_df)}"
+            )
         return None, None
 
     high = float(orb_df["high"].max())

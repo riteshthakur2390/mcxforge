@@ -2,9 +2,9 @@ import os
 from config.settings.utils import *
 
 S11_SWEEP_LOOKBACK = int(os.getenv("S11_SWEEP_LOOKBACK", "30"))
-S11_SWEEP_SWING_BARS = int(os.getenv("S11_SWEEP_SWING_BARS", "3"))
-S11_SWEEP_MIN_WICK_BODY = float(os.getenv("S11_SWEEP_MIN_WICK_BODY", "1.5"))
-S11_SWEEP_VOL_MULT = float(os.getenv("S11_SWEEP_VOL_MULT", "1.8"))
+S11_SWEEP_SWING_BARS = int(os.getenv("S11_SWEEP_SWING_BARS", "2"))
+S11_SWEEP_MIN_WICK_BODY = float(os.getenv("S11_SWEEP_MIN_WICK_BODY", "1.15"))
+S11_SWEEP_VOL_MULT = float(os.getenv("S11_SWEEP_VOL_MULT", "1.25"))
 S11_SWEEP_CLOSE_INSIDE = _flag("S11_SWEEP_CLOSE_INSIDE", "true")
 S11_VOL_MA_PERIOD = int(os.getenv("S11_VOL_MA_PERIOD", "20"))
 S11_CONF_BASE = float(os.getenv("S11_CONF_BASE", "0.58"))

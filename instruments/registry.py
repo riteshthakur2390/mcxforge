@@ -7,7 +7,7 @@ alias normalization, active contract resolution, and per-instrument strategy con
 
 import os
 from typing import Dict, List, Optional
-from datetime import date
+from datetime import date, timedelta
 
 from instruments.base import InstrumentConfig, ContractSpec
 from instruments.silverm import SILVERM_CONFIG, SILVERMIC_CONFIG, get_active_silverm_contract, get_active_silvermic_contract
@@ -56,54 +56,163 @@ ALL_COMMODITY_FUTURES_STRATEGIES = [
     "StochRSI", "EMASlope", "HeikinAshi", "ElliottWave",
 ]
 
-# Per-Instrument Strategy & Risk Governance
-# Each commodity can independently configure enabled strategies, votes, and risk.
+# Per-Instrument Strategy, Execution & Risk Governance
+# Each commodity independently configures enabled strategies, votes, SL, target, and trailing.
 DEFAULT_MIN_VOTES = int(os.getenv("MIN_STRATEGY_VOTES", "5"))
 
 INSTRUMENT_STRATEGY_CONFIG: Dict[str, dict] = {
+    "CRUDEOILM": {
+        "description": "High-momentum trending commodity (Live Focus)",
+        "enabled_strategies": [
+            "TrendFollowing", "OpeningRangeBreakout", "ADX+PSAR", "SuperTrend+RSI",
+            "VWAP+EMA", "PriceAction", "OIAnalysis", "OpeningRangeBias"
+        ],
+        "min_votes": 3,
+        "min_ml_confidence": 0.22,
+        "stop_loss_pct": 10.0,
+        "target1_pct": 14.0,
+        "target2_pct": 22.0,
+        "breakeven_trigger_pct": 10.0,
+        "trailing_activation_pct": 12.0,
+        "trailing_sl_pct": 8.0,
+        "giveback_cap_pct": 5.5,
+        "max_risk_per_trade_pct": 2.0,
+        "max_open_positions": 1,
+        "max_lots_per_trade": 2,
+    },
+    "CRUDEOIL": {
+        "description": "High-momentum trending commodity (Live Focus)",
+        "enabled_strategies": [
+            "TrendFollowing", "OpeningRangeBreakout", "ADX+PSAR", "SuperTrend+RSI",
+            "VWAP+EMA", "PriceAction", "OIAnalysis", "OpeningRangeBias"
+        ],
+        "min_votes": 3,
+        "min_ml_confidence": 0.22,
+        "stop_loss_pct": 10.0,
+        "target1_pct": 14.0,
+        "target2_pct": 22.0,
+        "breakeven_trigger_pct": 10.0,
+        "trailing_activation_pct": 12.0,
+        "trailing_sl_pct": 8.0,
+        "giveback_cap_pct": 5.5,
+        "max_risk_per_trade_pct": 2.0,
+        "max_open_positions": 1,
+        "max_lots_per_trade": 1,
+    },
+    "GOLDM": {
+        "description": "High-capital precision commodity",
+        "enabled_strategies": [
+            "TrendFollowing", "OpeningRangeBreakout", "RSIDivergence", "RSI2MeanReversion",
+            "CalendarSeasonality", "TermStructure", "SuperTrend+RSI", "CPR", "PriceAction"
+        ],
+        "min_votes": 4,
+        "min_ml_confidence": 0.30,
+        "stop_loss_pct": 7.5,
+        "target1_pct": 8.0,
+        "target2_pct": 13.5,
+        "breakeven_trigger_pct": 7.0,
+        "trailing_activation_pct": 8.0,
+        "trailing_sl_pct": 6.0,
+        "giveback_cap_pct": 4.5,
+        "max_risk_per_trade_pct": 1.5,
+        "max_open_positions": 1,
+        "max_lots_per_trade": 1,
+    },
+    "GOLD": {
+        "description": "Institutional liquidity sweep & mean-reversion",
+        "enabled_strategies": [
+            "PriceAction", "VolumeProfile", "LiqSweep", "FVG", "SMC",
+            "VWAPMeanReversion", "CPR", "OpeningRangeBreakout", "CalendarSeasonality"
+        ],
+        "min_votes": 3,
+        "min_ml_confidence": 0.30,
+        "stop_loss_pct": 7.5,
+        "target1_pct": 8.0,
+        "target2_pct": 13.5,
+        "breakeven_trigger_pct": 7.0,
+        "trailing_activation_pct": 8.0,
+        "trailing_sl_pct": 6.0,
+        "giveback_cap_pct": 4.5,
+        "max_risk_per_trade_pct": 1.5,
+        "max_open_positions": 1,
+        "max_lots_per_trade": 1,
+    },
     "SILVERM": {
-        "enabled_strategies": list(ALL_COMMODITY_FUTURES_STRATEGIES),
-        "min_votes": DEFAULT_MIN_VOTES,
+        "description": "Smart-money expansion & early momentum breakout",
+        "enabled_strategies": [
+            "SMC", "OrderFlowDelta", "VolumeProfile", "OIAnalysis", "TrendFollowing",
+            "OpeningRangeBreakout", "VWAPMeanReversion", "CPR", "FVG", "PriceAction", "ElliottWave"
+        ],
+        "min_votes": 4,
+        "min_ml_confidence": 0.26,
+        "stop_loss_pct": 8.5,
+        "target1_pct": 12.0,
+        "target2_pct": 18.0,
+        "breakeven_trigger_pct": 9.0,
+        "trailing_activation_pct": 10.0,
+        "trailing_sl_pct": 7.5,
+        "giveback_cap_pct": 5.5,
         "max_risk_per_trade_pct": 2.0,
         "max_open_positions": 1,
         "max_lots_per_trade": 1,
     },
     "SILVERMIC": {
-        "enabled_strategies": list(ALL_COMMODITY_FUTURES_STRATEGIES),
-        "min_votes": DEFAULT_MIN_VOTES,
-        "max_risk_per_trade_pct": 2.0,
-        "max_open_positions": 1,
-        "max_lots_per_trade": 2,
-    },
-    "GOLDM": {
+        "description": "Smart-money expansion & early momentum breakout (Micro)",
         "enabled_strategies": [
-            "TrendFollowing", "OpeningRangeBreakout", "VWAPMeanReversion", "VolatilityBreakout", "DonchianBreakout",
-            "SuperTrend+RSI", "VWAP+EMA", "ORB", "ADX+PSAR", "Ichimoku",
-            "PriceAction", "CPR", "EMASlope", "HeikinAshi"
+            "TrendFollowing", "OpeningRangeBreakout", "VWAPMeanReversion",
+            "VolatilityBreakout", "DonchianBreakout", "SuperTrend+RSI", "CPR",
+            "SMC", "OrderFlowDelta", "VolumeProfile", "OIAnalysis", "FVG", "PriceAction", "ElliottWave"
         ],
-        "min_votes": DEFAULT_MIN_VOTES,
-        "max_risk_per_trade_pct": 2.0,
-        "max_open_positions": 1,
-        "max_lots_per_trade": 1,
-    },
-    "CRUDEOILM": {
-        "enabled_strategies": [
-            "TrendFollowing", "OpeningRangeBreakout", "VolatilityBreakout", "DonchianBreakout",
-            "SuperTrend+RSI", "ORB", "BBSqueeze", "ADX+PSAR", "VolumeProfile",
-            "PriceAction", "SqueezeMomentum", "OpeningRangeBias"
-        ],
-        "min_votes": DEFAULT_MIN_VOTES,
+        "min_votes": 4,
+        "min_ml_confidence": 0.26,
+        "stop_loss_pct": 8.5,
+        "target1_pct": 12.0,
+        "target2_pct": 18.0,
+        "breakeven_trigger_pct": 9.0,
+        "trailing_activation_pct": 10.0,
+        "trailing_sl_pct": 7.5,
+        "giveback_cap_pct": 5.5,
         "max_risk_per_trade_pct": 2.0,
         "max_open_positions": 1,
         "max_lots_per_trade": 2,
     },
     "NATGASM": {
+        "description": "High-beta volatility micro-burst commodity",
         "enabled_strategies": [
-            "TrendFollowing", "OpeningRangeBreakout", "VolatilityBreakout", "DonchianBreakout",
-            "ORB", "BBSqueeze", "UTBot", "VolumeProfile", "PriceAction"
+            "RSIDivergence", "VolumeProfile", "CPR", "PriceAction",
+            "TimeOfDaySeasonality", "MACrossover", "ElliottWave",
+            "VWAPMeanReversion", "SqueezeMomentum"
         ],
-        "min_votes": DEFAULT_MIN_VOTES,
-        "max_risk_per_trade_pct": 1.5,   # Higher margin/volatility caution
+        "min_votes": 3,
+        "min_ml_confidence": 0.28,
+        "stop_loss_pct": 14.0,
+        "target1_pct": 18.0,
+        "target2_pct": 32.0,
+        "breakeven_trigger_pct": 12.0,
+        "trailing_activation_pct": 15.0,
+        "trailing_sl_pct": 10.0,
+        "giveback_cap_pct": 6.5,
+        "max_risk_per_trade_pct": 1.5,
+        "max_open_positions": 1,
+        "max_lots_per_trade": 1,
+    },
+    "NATURALGAS": {
+        "description": "High-beta volatility micro-burst commodity",
+        "enabled_strategies": [
+            "RSIDivergence", "VolumeProfile", "CPR", "PriceAction",
+            "TimeOfDaySeasonality", "MACrossover", "ElliottWave",
+            "VWAPMeanReversion", "SqueezeMomentum"
+        ],
+        "min_votes": 3,
+        "min_ml_confidence": 0.28,
+        "stop_loss_pct": 14.0,
+        "target1_pct": 18.0,
+        "target2_pct": 32.0,
+        "breakeven_trigger_pct": 12.0,
+        "trailing_activation_pct": 15.0,
+        "trailing_sl_pct": 10.0,
+        "giveback_cap_pct": 6.5,
+        "max_risk_per_trade_pct": 1.5,
         "max_open_positions": 1,
         "max_lots_per_trade": 1,
     }
@@ -136,8 +245,18 @@ def get_instrument_config(symbol: str = "SILVERM") -> InstrumentConfig:
 
 def get_instrument_strategy_config(symbol: str = "SILVERM") -> dict:
     """Retrieves strategy enablement and risk parameters for an instrument."""
+    sym_up = (symbol or "").strip().upper()
+    if sym_up in INSTRUMENT_STRATEGY_CONFIG:
+        return INSTRUMENT_STRATEGY_CONFIG[sym_up]
     norm = normalize_symbol(symbol)
-    return INSTRUMENT_STRATEGY_CONFIG.get(norm, INSTRUMENT_STRATEGY_CONFIG["SILVERM"])
+    if norm in INSTRUMENT_STRATEGY_CONFIG:
+        return INSTRUMENT_STRATEGY_CONFIG[norm]
+    return INSTRUMENT_STRATEGY_CONFIG.get("CRUDEOILM", INSTRUMENT_STRATEGY_CONFIG.get("SILVERM", {}))
+
+
+def get_instrument_risk_profile(symbol: str) -> dict:
+    """Convenience alias for retrieving full risk, SL, TP and trailing profile for an instrument."""
+    return get_instrument_strategy_config(symbol)
 
 
 def resolve_active_contract(symbol: str = "SILVERM", as_of: Optional[date] = None) -> ContractSpec:
@@ -158,6 +277,8 @@ def resolve_active_contract(symbol: str = "SILVERM", as_of: Optional[date] = Non
         month = today.month + 1 if today.month < 12 else 1
         year = today.year if today.month < 12 else today.year + 1
         expiry = date(year, month, 28)
+    while expiry.weekday() >= 5:
+        expiry -= timedelta(days=1)
 
     trading_symbol = f"{norm}-{expiry.strftime('%d%b%Y')}-FUT"
     return ContractSpec(
